@@ -1,0 +1,1 @@
+verbal_add_test(test_transcription_store test_transcription_store.cpp verbal_app)

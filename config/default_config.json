@@ -1,0 +1,22 @@
+{
+    "hotkey": {
+        "modifiers": ["ctrl", "super", "alt"]
+    },
+    "audio": {
+        "sample_rate": 16000,
+        "channels": 1
+    },
+    "recognition": {
+        "vosk_model": "vosk-model-small-en-us-0.15",
+        "whisper_model": "base.en",
+        "enable_whisper_refinement": true
+    },
+    "overlay": {
+        "position": { "x": -1, "y": -1 },
+        "size": 20
+    },
+    "storage": {
+        "transcriptions_path": "~/.config/verbal-code/transcriptions.json",
+        "max_transcriptions": 1000
+    }
+}

@@ -1,0 +1,1 @@
+verbal_add_test(test_transcription_orchestrator test_transcription_orchestrator.cpp verbal_recognition)

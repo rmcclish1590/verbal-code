@@ -1,0 +1,3 @@
+verbal_add_test(test_ring_buffer test_ring_buffer.cpp verbal_core)
+verbal_add_test(test_config test_config.cpp verbal_core)
+verbal_add_test(test_result test_result.cpp verbal_core)

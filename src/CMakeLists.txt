@@ -1,0 +1,7 @@
+add_subdirectory(core)
+add_subdirectory(audio)
+add_subdirectory(recognition)
+add_subdirectory(hotkey)
+add_subdirectory(injection)
+add_subdirectory(overlay)
+add_subdirectory(app)
