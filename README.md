@@ -13,7 +13,16 @@ Uses **Vosk** for real-time streaming transcription (words appear as you speak) 
 
 ## Installation
 
-Get up and running in four steps:
+One command to install everything — dependencies, speech models, build, binary, and app menu entry:
+
+```bash
+./scripts/install.sh
+```
+
+After installation, launch **Verbal Code** from your application menu or run `verbal-code` from a terminal.
+
+<details>
+<summary>Manual installation</summary>
 
 ```bash
 # 1. Install system dependencies
@@ -31,6 +40,16 @@ sudo cp build/src/app/verbal-code /usr/local/bin/
 ```
 
 After installing, run `verbal-code` from anywhere. Without step 4, run from the build directory with `./build/src/app/verbal-code`.
+
+</details>
+
+## Uninstall
+
+```bash
+./scripts/uninstall.sh
+```
+
+This removes the binary, desktop entry, and icon. It will ask before deleting user data (config and models).
 
 ## Dependencies
 
@@ -74,11 +93,14 @@ The build system gracefully handles missing optional dependencies — modules th
 ## Run
 
 ```bash
-# From the build directory
-./build/src/app/verbal-code
+# From the application menu
+# Search "Verbal Code" in your desktop's application launcher
 
-# Or, if installed to /usr/local/bin
+# From a terminal
 verbal-code
+
+# Or, from the build directory
+./build/src/app/verbal-code
 ```
 
 ## Test
@@ -123,6 +145,7 @@ Config lives at `~/.config/verbal-code/config.json`. A default is created on fir
 - **Draggable overlay dot** with white outline for visibility on any background; position persists across restarts
 - **Right-click context menu** for hotkey configuration
 - **Transcription storage** — captures saved to JSON when no input field is focused
+- **Application menu entry** — launches from your desktop's app launcher with a custom icon
 - **Graceful degradation** — modules with missing system dependencies are skipped at build time
 
 ## Architecture

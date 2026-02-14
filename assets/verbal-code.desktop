@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Verbal Code
+GenericName=Voice-to-Text
+Comment=System-wide push-to-talk voice-to-text transcription
+Exec=/usr/local/bin/verbal-code
+Icon=verbal-code
+Terminal=false
+StartupNotify=true
+Categories=Utility;Accessibility;Audio;
+Keywords=voice;speech;dictation;transcription;stt;microphone;

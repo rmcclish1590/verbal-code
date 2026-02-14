@@ -54,8 +54,8 @@ void GtkOverlayService::create_window() {
     gtk_window_set_decorated(GTK_WINDOW(window_), FALSE);
     gtk_widget_set_app_paintable(window_, TRUE);
 
-    // DOCK type hint: always on top, no taskbar entry, not covered by other windows
-    gtk_window_set_type_hint(GTK_WINDOW(window_), GDK_WINDOW_TYPE_HINT_DOCK);
+    // NOTIFICATION type hint: above panels/docks, no taskbar entry, no focus steal
+    gtk_window_set_type_hint(GTK_WINDOW(window_), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
     gtk_window_set_keep_above(GTK_WINDOW(window_), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(window_), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(window_), TRUE);

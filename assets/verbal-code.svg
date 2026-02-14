@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00E600"/>
+      <stop offset="100%" stop-color="#00AA00"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Circular background -->
+  <circle cx="256" cy="256" r="248" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="248" fill="none" stroke="#009900" stroke-width="4"/>
+
+  <!-- Microphone body -->
+  <rect x="220" y="120" width="72" height="140" rx="36" fill="#ffffff"/>
+
+  <!-- Microphone stand arc -->
+  <path d="M190 240 A66 66 0 0 0 322 240" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Microphone stand vertical line -->
+  <line x1="256" y1="306" x2="256" y2="350" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Microphone base -->
+  <line x1="224" y1="350" x2="288" y2="350" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Sound wave arcs (right side, transitioning to code brackets) -->
+  <path d="M330 200 A90 90 0 0 1 330 310" fill="none" stroke="url(#wave)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M355 175 A120 120 0 0 1 355 335" fill="none" stroke="url(#wave)" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Code angle bracket > (rightmost wave becomes a bracket) -->
+  <path d="M380 155 L430 255 L380 355" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.85"/>
+
+  <!-- Sound wave arcs (left side) -->
+  <path d="M182 200 A90 90 0 0 0 182 310" fill="none" stroke="url(#wave)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M157 175 A120 120 0 0 0 157 335" fill="none" stroke="url(#wave)" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Code angle bracket < (leftmost wave becomes a bracket) -->
+  <path d="M132 155 L82 255 L132 355" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.85"/>
+</svg>
