@@ -18,6 +18,12 @@ Result<void> Application::init(int argc, char* argv[]) {
     config_.load();
     LOG_INFO(TAG, "Configuration loaded");
 
+    // Warn early if config is not writable (permissions, disk full, etc.)
+    if (!config_.save()) {
+        LOG_WARN(TAG, "Config file is not writable — settings will NOT persist. "
+                      "Check permissions on ~/.config/verbal-code/");
+    }
+
     // Create transcription store
     transcription_store_ = std::make_unique<TranscriptionStore>(
         config_.transcriptions_path(), config_.max_transcriptions());
@@ -123,20 +129,35 @@ Result<void> Application::init(int argc, char* argv[]) {
     }
     overlay_->set_on_position_changed([this](int x, int y) {
         config_.set_overlay_position(x, y);
-        config_.save();
+        if (!config_.save()) {
+            LOG_WARN(TAG, "Failed to save config after overlay position change");
+        }
     });
     overlay_->set_on_quit_requested([this]() {
         quit();
     });
     overlay_->set_on_hotkey_change([this](const std::vector<std::string>& modifiers) {
         config_.set_hotkey_modifiers(modifiers);
-        config_.save();
+        if (!config_.save()) {
+            LOG_WARN(TAG, "Failed to save config after hotkey change");
+        }
 #ifdef VERBAL_HAS_HOTKEY
         if (hotkey_) {
             hotkey_->set_modifiers(modifiers);
         }
 #endif
         overlay_->set_current_modifiers(modifiers);
+    });
+    overlay_->set_on_history_requested([this]() {
+        if (transcription_store_) {
+            std::vector<std::string> texts;
+            const auto& entries = transcription_store_->entries();
+            texts.reserve(entries.size());
+            for (const auto& entry : entries) {
+                texts.push_back(entry.text);
+            }
+            overlay_->show_history_dialog(texts);
+        }
     });
     overlay_->set_current_modifiers(config_.hotkey_modifiers());
     auto ov_result = overlay_->start();
@@ -183,7 +204,9 @@ void Application::quit() {
 #endif
     if (vosk_) vosk_->stop();
 
-    config_.save();
+    if (!config_.save()) {
+        LOG_WARN(TAG, "Failed to save config on shutdown");
+    }
     if (transcription_store_) transcription_store_->save();
 
     LOG_INFO(TAG, "Application shut down");
@@ -261,26 +284,22 @@ void Application::on_refined_text(const std::string& vosk_text, const std::strin
 
     LOG_INFO(TAG, "Final text (" + std::string(source == TranscriptionSource::WHISPER ? "whisper" : "vosk") + "): " + final_text);
 
+    // Always store transcription for history
+    transcription_store_->append(final_text, source);
+    transcription_store_->save();
+
 #ifdef VERBAL_HAS_INJECTION
     if (injection_ && injection_->is_running()) {
         if (injection_->has_focused_input()) {
             auto result = injection_->inject_text(final_text);
             if (result.is_err()) {
                 LOG_WARN(TAG, "Injection failed: " + result.error());
-                transcription_store_->append(final_text, source);
-                transcription_store_->save();
             }
         } else {
-            transcription_store_->append(final_text, source);
-            transcription_store_->save();
-            LOG_INFO(TAG, "No focused input, saved transcription to store");
+            LOG_INFO(TAG, "No focused input, transcription saved to store");
         }
-    } else
-#endif
-    {
-        transcription_store_->append(final_text, source);
-        transcription_store_->save();
     }
+#endif
 
     partial_text_.clear();
 }

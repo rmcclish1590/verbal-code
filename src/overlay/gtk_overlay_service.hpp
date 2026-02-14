@@ -32,6 +32,8 @@ public:
     void set_on_quit_requested(QuitCallback cb) override { on_quit_requested_ = std::move(cb); }
     void set_on_hotkey_change(HotkeyChangeCallback cb) override { on_hotkey_change_ = std::move(cb); }
     void set_current_modifiers(const std::vector<std::string>& modifiers) override { current_modifiers_ = modifiers; }
+    void set_on_history_requested(HistoryCallback cb) override { on_history_requested_ = std::move(cb); }
+    void show_history_dialog(const std::vector<std::string>& texts) override;
 
 private:
     static gboolean on_draw(GtkWidget* widget, cairo_t* cr, gpointer data);
@@ -53,6 +55,7 @@ private:
     PositionCallback on_position_changed_;
     QuitCallback on_quit_requested_;
     HotkeyChangeCallback on_hotkey_change_;
+    HistoryCallback on_history_requested_;
     std::vector<std::string> current_modifiers_;
 
     bool dragging_ = false;

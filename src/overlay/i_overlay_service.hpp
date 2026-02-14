@@ -35,6 +35,13 @@ public:
 
     // Set current modifiers so the dialog can pre-populate
     virtual void set_current_modifiers(const std::vector<std::string>& modifiers) = 0;
+
+    // Callback when user requests history from context menu
+    using HistoryCallback = std::function<void()>;
+    virtual void set_on_history_requested(HistoryCallback cb) = 0;
+
+    // Show the history dialog with a list of transcription texts
+    virtual void show_history_dialog(const std::vector<std::string>& texts) = 0;
 };
 
 } // namespace verbal

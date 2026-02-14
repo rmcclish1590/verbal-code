@@ -237,6 +237,17 @@ void GtkOverlayService::show_context_menu(GdkEventButton* event) {
         }), this);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), hotkey_item);
 
+    // "History" item
+    GtkWidget* history_item = gtk_menu_item_new_with_label("History");
+    g_signal_connect_swapped(history_item, "activate",
+        G_CALLBACK(+[](gpointer data) {
+            auto* self = static_cast<GtkOverlayService*>(data);
+            if (self->on_history_requested_) {
+                self->on_history_requested_();
+            }
+        }), this);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), history_item);
+
     // Separator
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
@@ -313,6 +324,74 @@ void GtkOverlayService::show_hotkey_dialog() {
         }
     }
 
+    gtk_widget_destroy(dialog);
+}
+
+void GtkOverlayService::show_history_dialog(const std::vector<std::string>& texts) {
+    GtkWidget* dialog = gtk_dialog_new_with_buttons(
+        "History",
+        nullptr,
+        static_cast<GtkDialogFlags>(0),
+        "Close", GTK_RESPONSE_CLOSE,
+        nullptr
+    );
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 500, 400);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), TRUE);
+
+    GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+
+    GtkWidget* scrolled = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+        GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_container_add(GTK_CONTAINER(content), scrolled);
+
+    GtkWidget* list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(list_box), 8);
+    gtk_container_add(GTK_CONTAINER(scrolled), list_box);
+
+    if (texts.empty()) {
+        GtkWidget* empty_label = gtk_label_new("No transcriptions yet.");
+        gtk_container_add(GTK_CONTAINER(list_box), empty_label);
+    } else {
+        // Show newest first
+        for (auto it = texts.rbegin(); it != texts.rend(); ++it) {
+            GtkWidget* frame = gtk_frame_new(nullptr);
+            GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+            gtk_container_set_border_width(GTK_CONTAINER(row), 6);
+            gtk_container_add(GTK_CONTAINER(frame), row);
+
+            GtkWidget* label = gtk_label_new(it->c_str());
+            gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+            gtk_label_set_selectable(GTK_LABEL(label), TRUE);
+            gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+            gtk_widget_set_hexpand(label, TRUE);
+            gtk_container_add(GTK_CONTAINER(row), label);
+
+            GtkWidget* copy_btn = gtk_button_new_with_label("Copy");
+            gtk_widget_set_valign(copy_btn, GTK_ALIGN_START);
+
+            // Allocate a copy of the string for the callback
+            std::string* text_copy = new std::string(*it);
+            g_signal_connect(copy_btn, "clicked",
+                G_CALLBACK(+[](GtkWidget* /*btn*/, gpointer data) {
+                    auto* text = static_cast<std::string*>(data);
+                    GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+                    gtk_clipboard_set_text(clipboard, text->c_str(), static_cast<gint>(text->size()));
+                }), text_copy);
+            // Free the string when the button is destroyed
+            g_signal_connect(copy_btn, "destroy",
+                G_CALLBACK(+[](GtkWidget* /*btn*/, gpointer data) {
+                    delete static_cast<std::string*>(data);
+                }), text_copy);
+
+            gtk_container_add(GTK_CONTAINER(row), copy_btn);
+            gtk_container_add(GTK_CONTAINER(list_box), frame);
+        }
+    }
+
+    gtk_widget_show_all(dialog);
+    gtk_dialog_run(GTK_DIALOG(dialog));
     gtk_widget_destroy(dialog);
 }
 

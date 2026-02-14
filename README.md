@@ -11,6 +11,27 @@ Uses **Vosk** for real-time streaming transcription (words appear as you speak) 
 3. Release the hotkey — whisper.cpp refines the transcription and corrects if needed
 4. If no input field is focused, the transcription is saved to `~/.config/verbal-code/transcriptions.json`
 
+## Installation
+
+Get up and running in four steps:
+
+```bash
+# 1. Install system dependencies
+./scripts/install_deps.sh
+
+# 2. Download speech models (~200 MB)
+./scripts/download_models.sh
+
+# 3. Build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+# 4. Install to system (optional)
+sudo cp build/src/app/verbal-code /usr/local/bin/
+```
+
+After installing, run `verbal-code` from anywhere. Without step 4, run from the build directory with `./build/src/app/verbal-code`.
+
 ## Dependencies
 
 ### System libraries
@@ -53,7 +74,11 @@ The build system gracefully handles missing optional dependencies — modules th
 ## Run
 
 ```bash
+# From the build directory
 ./build/src/app/verbal-code
+
+# Or, if installed to /usr/local/bin
+verbal-code
 ```
 
 ## Test
@@ -90,6 +115,15 @@ Config lives at `~/.config/verbal-code/config.json`. A default is created on fir
     }
 }
 ```
+
+## Features
+
+- **Real-time streaming transcription** — words appear as you speak via Vosk
+- **Whisper.cpp refinement** — optional post-processing pass for higher accuracy
+- **Draggable overlay dot** with white outline for visibility on any background; position persists across restarts
+- **Right-click context menu** for hotkey configuration
+- **Transcription storage** — captures saved to JSON when no input field is focused
+- **Graceful degradation** — modules with missing system dependencies are skipped at build time
 
 ## Architecture
 

@@ -42,3 +42,11 @@ TEST(GtkOverlayService, SetCurrentModifiers) {
     service.set_current_modifiers(mods);
     // No getter, but it shouldn't crash and is used internally by the dialog
 }
+
+TEST(GtkOverlayService, SetOnHistoryRequested) {
+    GtkOverlayService service;
+    bool called = false;
+    service.set_on_history_requested([&called]() { called = true; });
+    // Callback is stored; we can't trigger it without GTK, but setting it shouldn't crash
+    EXPECT_FALSE(called);
+}
