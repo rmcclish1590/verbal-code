@@ -52,22 +52,10 @@ void EvdevHotkeyService::set_modifiers(const std::vector<std::string>& modifiers
 
 bool EvdevHotkeyService::check_modifiers(const ModifierState& state) const {
     std::lock_guard<std::mutex> lock(modifier_mutex_);
-    for (const auto& mod : required_modifiers_) {
-        if (mod == "ctrl" || mod == "control") {
-            if (!state.ctrl) return false;
-        } else if (mod == "alt") {
-            if (!state.alt) return false;
-        } else if (mod == "super" || mod == "meta") {
-            if (!state.super) return false;
-        } else if (mod == "shift") {
-            if (!state.shift) return false;
-        }
-    }
-    return !required_modifiers_.empty();
+    return check_modifiers_match(required_modifiers_, state);
 }
 
-EvdevHotkeyService::ModifierState EvdevHotkeyService::build_modifier_state() const {
-    // key_mutex_ must be held by caller or we need to lock it
+ModifierState EvdevHotkeyService::build_modifier_state() const {
     ModifierState state;
     state.ctrl  = held_keys_.count(KEY_LEFTCTRL)  || held_keys_.count(KEY_RIGHTCTRL);
     state.alt   = held_keys_.count(KEY_LEFTALT)   || held_keys_.count(KEY_RIGHTALT);
@@ -198,8 +186,14 @@ void EvdevHotkeyService::stop() {
     }
     device_fds_.clear();
 
-    if (wakeup_pipe_[0] >= 0) { close(wakeup_pipe_[0]); wakeup_pipe_[0] = -1; }
-    if (wakeup_pipe_[1] >= 0) { close(wakeup_pipe_[1]); wakeup_pipe_[1] = -1; }
+    if (wakeup_pipe_[0] >= 0) {
+        close(wakeup_pipe_[0]);
+        wakeup_pipe_[0] = -1;
+    }
+    if (wakeup_pipe_[1] >= 0) {
+        close(wakeup_pipe_[1]);
+        wakeup_pipe_[1] = -1;
+    }
 
     LOG_INFO(TAG, "Evdev hotkey service stopped");
 }

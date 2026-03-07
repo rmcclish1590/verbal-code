@@ -17,19 +17,21 @@ namespace verbal {
 class TranscriptionOrchestrator {
 public:
     struct Config {
-        bool enable_whisper_refinement = true;
-        double refinement_threshold = 0.2;
+        bool enable_whisper_refinement;
+        // Minimum Levenshtein edit distance ratio (0.0–1.0) between Vosk and
+        // Whisper outputs required to prefer Whisper. 0.0 = always prefer Whisper,
+        // 1.0 = never use Whisper.
+        double refinement_threshold;
+
+        Config() : enable_whisper_refinement(true), refinement_threshold(0.2) {}
+        Config(bool refinement, double threshold)
+            : enable_whisper_refinement(refinement), refinement_threshold(threshold) {}
     };
 
-    TranscriptionOrchestrator(
+    explicit TranscriptionOrchestrator(
         IRecognitionService* recognition,
-        IRefinementService* refinement,
-        Config config);
-
-    // Convenience: default config
-    TranscriptionOrchestrator(
-        IRecognitionService* recognition,
-        IRefinementService* refinement = nullptr);
+        IRefinementService* refinement = nullptr,
+        Config config = Config{});
 
     // Callbacks
     using PartialCallback = std::function<void(const std::string& text)>;
@@ -44,9 +46,6 @@ public:
     // Called when recording stops. Triggers refinement if enabled.
     // audio: the full recording for Whisper processing
     void on_recording_stop(const std::vector<AudioSample>& audio);
-
-    // Get the last Vosk result
-    const std::string& vosk_result() const { return vosk_text_; }
 
     // Check if refinement produced a different result
     bool was_refined() const { return was_refined_; }

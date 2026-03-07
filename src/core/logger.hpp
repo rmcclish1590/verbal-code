@@ -2,7 +2,6 @@
 
 #include <string>
 #include <mutex>
-#include <iostream>
 
 namespace verbal {
 
@@ -18,7 +17,6 @@ public:
     static Logger& instance();
 
     void set_level(LogLevel level) { level_ = level; }
-    LogLevel level() const { return level_; }
 
     void log(LogLevel level, const std::string& tag, const std::string& msg);
 

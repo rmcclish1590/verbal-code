@@ -105,8 +105,8 @@ bool Config::load(const std::string& path) {
         data_ = default_config();
         merge_safe(data_, loaded);
         return true;
-    } catch (const nlohmann::json::exception& e) {
-        std::cerr << "Config parse error: " << e.what() << "\n";
+    } catch (const nlohmann::json::exception&) {
+        std::cerr << "Config parse error (invalid JSON). Using defaults.\n";
         apply_defaults();
         return false;
     }

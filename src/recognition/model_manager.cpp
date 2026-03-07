@@ -14,6 +14,10 @@ ModelManager::ModelManager(const std::string& data_dir)
 }
 
 Result<std::string> ModelManager::vosk_model_path(const std::string& model_name) const {
+    if (model_name.find('/') != std::string::npos ||
+        model_name.find("..") != std::string::npos) {
+        return Result<std::string>::err("Invalid model name: " + model_name);
+    }
     std::string path = models_dir_ + "/" + model_name;
     if (fs::exists(path) && fs::is_directory(path)) {
         return Result<std::string>::ok(path);
@@ -24,7 +28,10 @@ Result<std::string> ModelManager::vosk_model_path(const std::string& model_name)
 }
 
 Result<std::string> ModelManager::whisper_model_path(const std::string& model_name) const {
-    // Whisper models use ggml- prefix and .bin extension
+    if (model_name.find('/') != std::string::npos ||
+        model_name.find("..") != std::string::npos) {
+        return Result<std::string>::err("Invalid model name: " + model_name);
+    }
     std::string filename = "ggml-" + model_name + ".bin";
     std::string path = models_dir_ + "/" + filename;
     if (fs::exists(path) && fs::is_regular_file(path)) {
@@ -33,14 +40,6 @@ Result<std::string> ModelManager::whisper_model_path(const std::string& model_na
     return Result<std::string>::err(
         "Whisper model not found at: " + path +
         "\nRun scripts/download_models.sh to download models.");
-}
-
-bool ModelManager::has_vosk_model(const std::string& model_name) const {
-    return vosk_model_path(model_name).is_ok();
-}
-
-bool ModelManager::has_whisper_model(const std::string& model_name) const {
-    return whisper_model_path(model_name).is_ok();
 }
 
 } // namespace verbal

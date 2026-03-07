@@ -22,23 +22,23 @@ TEST(EvdevHotkeyService, ModifierStateCheck) {
     service.set_modifiers({"ctrl", "super", "alt"});
 
     // All pressed
-    EvdevHotkeyService::ModifierState all{true, true, true, false};
+    verbal::ModifierState all{true, true, true, false};
     EXPECT_TRUE(service.check_modifiers(all));
 
     // Missing ctrl
-    EvdevHotkeyService::ModifierState no_ctrl{false, true, true, false};
+    verbal::ModifierState no_ctrl{false, true, true, false};
     EXPECT_FALSE(service.check_modifiers(no_ctrl));
 
     // Missing super
-    EvdevHotkeyService::ModifierState no_super{true, false, true, false};
+    verbal::ModifierState no_super{true, false, true, false};
     EXPECT_FALSE(service.check_modifiers(no_super));
 
     // Missing alt
-    EvdevHotkeyService::ModifierState no_alt{true, true, false, false};
+    verbal::ModifierState no_alt{true, true, false, false};
     EXPECT_FALSE(service.check_modifiers(no_alt));
 
     // None pressed
-    EvdevHotkeyService::ModifierState none{false, false, false, false};
+    verbal::ModifierState none{false, false, false, false};
     EXPECT_FALSE(service.check_modifiers(none));
 }
 
@@ -46,7 +46,7 @@ TEST(EvdevHotkeyService, EmptyModifiers) {
     EvdevHotkeyService service;
     service.set_modifiers({});
 
-    EvdevHotkeyService::ModifierState state{true, true, true, true};
+    verbal::ModifierState state{true, true, true, true};
     EXPECT_FALSE(service.check_modifiers(state));
 }
 
@@ -54,10 +54,10 @@ TEST(EvdevHotkeyService, CustomModifiers) {
     EvdevHotkeyService service;
     service.set_modifiers({"ctrl", "alt"});
 
-    EvdevHotkeyService::ModifierState ok_state{true, false, true, false};
+    verbal::ModifierState ok_state{true, false, true, false};
     EXPECT_TRUE(service.check_modifiers(ok_state));
 
-    EvdevHotkeyService::ModifierState missing{true, false, false, false};
+    verbal::ModifierState missing{true, false, false, false};
     EXPECT_FALSE(service.check_modifiers(missing));
 }
 

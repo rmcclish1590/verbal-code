@@ -1,6 +1,7 @@
 #pragma once
 
 #include "i_hotkey_service.hpp"
+#include "modifier_state.hpp"
 #include "logger.hpp"
 
 #include <xcb/xcb.h>
@@ -30,14 +31,6 @@ public:
     void set_on_release(VoidCallback cb) override { on_release_ = std::move(cb); }
     bool is_pressed() const override { return pressed_.load(std::memory_order_acquire); }
     bool any_modifiers_held() const override;
-
-    // For testing: simulate modifier state
-    struct ModifierState {
-        bool ctrl = false;
-        bool super = false;
-        bool alt = false;
-        bool shift = false;
-    };
 
     // Check if all required modifiers are active given current state
     bool check_modifiers(const ModifierState& state) const;

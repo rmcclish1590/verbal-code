@@ -1,4 +1,5 @@
 #include "application.hpp"
+#include "logger.hpp"
 #include "session.hpp"
 #include "transcription_orchestrator.hpp"
 
@@ -44,6 +45,9 @@ namespace verbal {
 namespace {
 constexpr const char* TAG = "App";
 constexpr size_t RING_BUFFER_SAMPLES = 16000 * 10; // 10 seconds of audio
+constexpr int MODIFIER_WAIT_TIMEOUT_MS = 2000;
+constexpr int MODIFIER_POLL_INTERVAL_MS = 10;
+constexpr int MODIFIER_SETTLE_MS = 50;
 } // namespace
 
 Application::Application() = default;
@@ -316,7 +320,6 @@ void Application::quit() {
 void Application::on_hotkey_press() {
     if (recording_) return;
     recording_ = true;
-    partial_text_.clear();
 
     LOG_INFO(TAG, "Recording started");
 
@@ -370,62 +373,62 @@ void Application::on_hotkey_release() {
 }
 
 void Application::on_partial_text(const std::string& text) {
-    // Don't inject partials during recording — modifier keys (Ctrl+Super+Alt)
-    // are still held, so xdotool keystrokes combine with them and produce nothing.
-    // We track the partial text for logging; final injection happens on release.
+    // Don't inject partials during recording — modifier keys are still held,
+    // so synthetic keystrokes combine with them and produce garbage.
     LOG_DEBUG(TAG, "Partial: " + text);
-    partial_text_ = text;
+}
+
+void Application::wait_for_modifiers_released() {
+    if (!hotkey_) return;
+    constexpr auto MAX_WAIT = std::chrono::milliseconds(MODIFIER_WAIT_TIMEOUT_MS);
+    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(MODIFIER_POLL_INTERVAL_MS);
+    auto start = std::chrono::steady_clock::now();
+    while (hotkey_->any_modifiers_held() &&
+           std::chrono::steady_clock::now() - start < MAX_WAIT) {
+        std::this_thread::sleep_for(POLL_INTERVAL);
+    }
+    auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    if (hotkey_->any_modifiers_held()) {
+        LOG_WARN(TAG, "Modifier wait timed out after " + std::to_string(waited) +
+                      "ms — modifiers still held, injection may produce garbage");
+    } else {
+        LOG_DEBUG(TAG, "Modifiers released after " + std::to_string(waited) + "ms");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(MODIFIER_SETTLE_MS));
+}
+
+void Application::try_inject_text(const std::string& text) {
+    if (!injection_ || !injection_->is_running()) return;
+    if (!injection_->has_focused_input()) {
+        LOG_INFO(TAG, "No focused input, transcription saved to store only");
+        return;
+    }
+    auto result = injection_->inject_text(text);
+    if (result.is_err()) {
+        LOG_WARN(TAG, "Injection failed: " + result.error());
+    }
 }
 
 void Application::on_refined_text(const std::string& vosk_text, const std::string& refined_text) {
     TranscriptionSource source = (vosk_text != refined_text)
         ? TranscriptionSource::WHISPER
         : TranscriptionSource::VOSK;
-    std::string final_text = (source == TranscriptionSource::WHISPER) ? refined_text : vosk_text;
+    const std::string& final_text = (source == TranscriptionSource::WHISPER)
+        ? refined_text : vosk_text;
 
     if (final_text.empty()) return;
 
-    LOG_INFO(TAG, "Final text (" + std::string(source == TranscriptionSource::WHISPER ? "whisper" : "vosk") + "): " + final_text);
+    const char* source_name = (source == TranscriptionSource::WHISPER) ? "whisper" : "vosk";
+    LOG_INFO(TAG, std::string("Final text (") + source_name + "): " +
+             std::to_string(final_text.size()) + " chars");
+    LOG_DEBUG(TAG, std::string("Final text content: ") + final_text);
 
-    // Always store transcription for history
     transcription_store_->append(final_text, source);
     transcription_store_->save();
 
-    // Wait for all modifier keys to be physically released before injecting.
-    // The hotkey release fires when the combination breaks (one key lifts),
-    // but other modifiers may still be held — injecting while any modifier
-    // is down produces garbage output like "4224".
-    if (hotkey_) {
-        auto start = std::chrono::steady_clock::now();
-        constexpr auto MAX_WAIT = std::chrono::milliseconds(2000);
-        while (hotkey_->any_modifiers_held() &&
-               std::chrono::steady_clock::now() - start < MAX_WAIT) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start).count();
-        if (hotkey_->any_modifiers_held()) {
-            LOG_WARN(TAG, "Modifier wait timed out after " + std::to_string(waited) +
-                          "ms — modifiers still held, injection may produce garbage");
-        } else {
-            LOG_DEBUG(TAG, "Modifiers released after " + std::to_string(waited) + "ms");
-        }
-        // Extra settling time for OS to process the key-up events
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-
-    if (injection_ && injection_->is_running()) {
-        if (injection_->has_focused_input()) {
-            auto result = injection_->inject_text(final_text);
-            if (result.is_err()) {
-                LOG_WARN(TAG, "Injection failed: " + result.error());
-            }
-        } else {
-            LOG_INFO(TAG, "No focused input, transcription saved to store");
-        }
-    }
-
-    partial_text_.clear();
+    wait_for_modifiers_released();
+    try_inject_text(final_text);
 }
 
 } // namespace verbal

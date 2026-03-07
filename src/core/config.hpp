@@ -38,9 +38,6 @@ public:
     void set_overlay_position(int x, int y);
     void set_hotkey_modifiers(const std::vector<std::string>& mods);
 
-    // Raw access
-    const nlohmann::json& data() const { return data_; }
-
 private:
     void apply_defaults();
     static std::string expand_path(const std::string& path);

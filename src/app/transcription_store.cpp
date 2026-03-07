@@ -69,6 +69,12 @@ Result<void> TranscriptionStore::save() const {
         }
 
         file << j.dump(2) << "\n";
+        file.close();
+        // Restrict permissions to owner-only (transcriptions may contain sensitive content)
+        std::error_code ec;
+        fs::permissions(path_,
+            fs::perms::owner_read | fs::perms::owner_write,
+            fs::perm_options::replace, ec);
         return Result<void>::ok();
     } catch (const std::exception& e) {
         return Result<void>::err("Failed to save transcriptions: " + std::string(e.what()));

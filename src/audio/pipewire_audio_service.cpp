@@ -1,6 +1,5 @@
 #include "pipewire_audio_service.hpp"
 
-#include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
 
 #include <cstring>

@@ -155,7 +155,9 @@ std::string VoskRecognitionService::extract_text(const char* json_str) {
         if (j.contains("partial") && !j["partial"].get<std::string>().empty()) {
             return j["partial"].get<std::string>();
         }
-    } catch (...) {}
+    } catch (const nlohmann::json::exception& e) {
+        LOG_WARN(TAG, std::string("JSON parse error in extract_text: ") + e.what());
+    }
     return "";
 }
 

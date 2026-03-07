@@ -1,7 +1,6 @@
 #include "portal_hotkey_service.hpp"
 
 #include <algorithm>
-#include <sstream>
 
 namespace verbal {
 
@@ -94,11 +93,7 @@ void PortalHotkeyService::dbus_thread_func() {
     create_session();
 
     loop_ = g_main_loop_new(nullptr, FALSE);
-
-    while (running_.load()) {
-        g_main_context_iteration(g_main_loop_get_context(loop_), TRUE);
-    }
-
+    g_main_loop_run(loop_);
     g_main_loop_unref(loop_);
     loop_ = nullptr;
 }
