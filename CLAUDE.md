@@ -72,3 +72,9 @@ Each `src/<module>/` directory contains:
 - Use RAII for all resource management (audio streams, OS handles, etc.).
 - Errors in service boundaries use `std::expected` (C++23) or a Result type; exceptions are reserved for truly exceptional/unrecoverable situations.
 - Audio processing uses a lock-free ring buffer for the capture-to-recognition pipeline.
+
+## GitHub Workflow
+
+- **Never commit directly to `main`.** All changes must be made on a feature branch.
+- Create a descriptive branch name (e.g., `fix/injection-garbage-output`, `feat/wayland-support`).
+- Keep commits focused and atomic — one logical change per commit.
