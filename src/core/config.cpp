@@ -13,7 +13,7 @@ namespace {
 
 nlohmann::json default_config() {
     return nlohmann::json{
-        {"hotkey", {{"modifiers", {"ctrl", "super", "alt"}}}},
+        {"hotkey", {{"modifiers", {"ctrl", "super", "alt"}}, {"trigger_key", "v"}}},
         {"audio", {{"sample_rate", 16000}, {"channels", 1}}},
         {"recognition", {
             {"vosk_model", "vosk-model-small-en-us-0.15"},
@@ -189,6 +189,11 @@ std::string Config::transcriptions_path() const {
 int Config::max_transcriptions() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return data_["storage"]["max_transcriptions"].get<int>();
+}
+
+std::string Config::hotkey_trigger_key() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return data_["hotkey"]["trigger_key"].get<std::string>();
 }
 
 void Config::set_overlay_position(int x, int y) {

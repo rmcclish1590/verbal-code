@@ -53,11 +53,11 @@ This removes the binary, desktop entry, and icon. It will ask before deleting us
 
 ## Dependencies
 
-### System libraries
+### System libraries (build-time)
 
 ```bash
 sudo apt install \
-    build-essential cmake pkg-config \
+    build-essential cmake pkg-config curl unzip \
     libpipewire-0.3-dev \
     libxcb1-dev libxcb-xinput-dev \
     libxkbcommon-dev libxkbcommon-x11-dev \
@@ -65,11 +65,28 @@ sudo apt install \
     libxdo-dev
 ```
 
-Or run the install script:
+### Wayland runtime tools
+
+On Wayland sessions, text injection uses `wtype` (recommended) with `wl-clipboard` + `ydotool` as fallback:
+
+```bash
+sudo apt install wtype wl-clipboard ydotool
+```
+
+Global hotkeys on Wayland use evdev, which requires your user to be in the `input` group:
+
+```bash
+sudo usermod -aG input $USER
+# Log out and back in for this to take effect
+```
+
+### Install all dependencies at once
 
 ```bash
 ./scripts/install_deps.sh
 ```
+
+This installs both build-time and Wayland runtime dependencies.
 
 ### Speech models
 
@@ -116,7 +133,8 @@ Config lives at `~/.config/verbal-code/config.json`. A default is created on fir
 ```json
 {
     "hotkey": {
-        "modifiers": ["ctrl", "super", "alt"]
+        "modifiers": ["ctrl", "super", "alt"],
+        "trigger_key": "v"
     },
     "audio": {
         "sample_rate": 16000,
@@ -142,6 +160,7 @@ Config lives at `~/.config/verbal-code/config.json`. A default is created on fir
 
 - **Real-time streaming transcription** — words appear as you speak via Vosk
 - **Whisper.cpp refinement** — optional post-processing pass for higher accuracy
+- **X11 and Wayland support** — automatically selects the right backend for your session
 - **Draggable overlay dot** with white outline for visibility on any background; position persists across restarts
 - **Right-click context menu** for hotkey configuration
 - **Transcription storage** — captures saved to JSON when no input field is focused
@@ -152,16 +171,16 @@ Config lives at `~/.config/verbal-code/config.json`. A default is created on fir
 
 ```
 src/
-  core/           Shared types, ring buffer, config, logging
+  core/           Shared types, ring buffer, config, session detection, logging
   audio/          PipeWire audio capture
   recognition/    Vosk streaming STT + whisper.cpp refinement
-  hotkey/         XCB global hotkey detection
-  injection/      libxdo text injection
+  hotkey/         Global hotkey detection (evdev on Wayland, XCB on X11, portal fallback)
+  injection/      Text injection (wtype on Wayland, libxdo on X11)
   overlay/        GTK3 status dot overlay
   app/            Service orchestration and entry point
 ```
 
-Each module is an isolated service with an abstract interface (`I`-prefixed), enabling dependency injection and mock-based testing.
+Each module is an isolated service with an abstract interface (`I`-prefixed), enabling dependency injection and mock-based testing. The application automatically detects X11 or Wayland sessions at runtime and selects the appropriate backend.
 
 ## Tech stack
 
@@ -170,8 +189,8 @@ Each module is an isolated service with an abstract interface (`I`-prefixed), en
 | Audio capture | PipeWire |
 | Real-time STT | Vosk |
 | Accuracy refinement | whisper.cpp |
-| Global hotkeys | XCB + libxkbcommon |
+| Global hotkeys | evdev (Wayland), XCB + libxkbcommon (X11), D-Bus GlobalShortcuts (portal fallback) |
 | Overlay UI | GTK3 |
-| Text injection | libxdo |
+| Text injection | wtype (Wayland), libxdo (X11) |
 | JSON | nlohmann/json |
 | Testing | GoogleTest |

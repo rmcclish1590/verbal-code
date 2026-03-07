@@ -1,0 +1,26 @@
+# Build
+build/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+compile_commands.json
+
+# Models (large binaries)
+models/
+*.bin
+*.pt
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (user-specific)
+*.local.json

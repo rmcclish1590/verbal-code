@@ -3,38 +3,25 @@
 #include "config.hpp"
 #include "logger.hpp"
 #include "ring_buffer.hpp"
+#include "session.hpp"
 #include "types.hpp"
 #include "result.hpp"
 #include "transcription_store.hpp"
-
-#include "vosk_recognition_service.hpp"
-#include "transcription_orchestrator.hpp"
 #include "model_manager.hpp"
 
-#ifdef VERBAL_ENABLE_WHISPER
-#include "whisper_refinement_service.hpp"
-#endif
-
-#ifdef VERBAL_HAS_AUDIO
-#include "pipewire_audio_service.hpp"
-#endif
-
-#ifdef VERBAL_HAS_HOTKEY
-#include "xcb_hotkey_service.hpp"
-#endif
-
-#ifdef VERBAL_HAS_INJECTION
-#include "xdo_injection_service.hpp"
-#endif
-
-#ifdef VERBAL_HAS_OVERLAY
-#include "gtk_overlay_service.hpp"
-#endif
+#include "i_audio_service.hpp"
+#include "i_recognition_service.hpp"
+#include "i_refinement_service.hpp"
+#include "i_hotkey_service.hpp"
+#include "i_injection_service.hpp"
+#include "i_overlay_service.hpp"
 
 #include <memory>
 #include <string>
 
 namespace verbal {
+
+class TranscriptionOrchestrator;
 
 class Application {
 public:
@@ -46,6 +33,14 @@ public:
     void quit();
 
 private:
+    // init() decomposition
+    Result<void> init_config();
+    Result<void> init_recognition();
+    Result<void> init_audio();
+    Result<void> init_hotkey(SessionType session);
+    Result<void> init_injection(SessionType session);
+    Result<void> init_overlay(int argc, char* argv[]);
+
     void on_hotkey_press();
     void on_hotkey_release();
     void on_partial_text(const std::string& text);
@@ -56,31 +51,17 @@ private:
     std::unique_ptr<TranscriptionStore> transcription_store_;
 
     std::unique_ptr<RingBuffer<AudioSample>> ring_buffer_;
-    std::unique_ptr<VoskRecognitionService> vosk_;
+    std::unique_ptr<IRecognitionService> vosk_;
     std::unique_ptr<TranscriptionOrchestrator> orchestrator_;
+    std::unique_ptr<IRefinementService> whisper_;
+    std::unique_ptr<IAudioService> audio_;
 
-#ifdef VERBAL_ENABLE_WHISPER
-    std::unique_ptr<WhisperRefinementService> whisper_;
-#endif
-
-#ifdef VERBAL_HAS_AUDIO
-    std::unique_ptr<PipeWireAudioService> audio_;
-#endif
-
-#ifdef VERBAL_HAS_HOTKEY
-    std::unique_ptr<XcbHotkeyService> hotkey_;
-#endif
-
-#ifdef VERBAL_HAS_INJECTION
-    std::unique_ptr<XdoInjectionService> injection_;
-#endif
-
-#ifdef VERBAL_HAS_OVERLAY
-    std::unique_ptr<GtkOverlayService> overlay_;
-#endif
+    std::unique_ptr<IHotkeyService> hotkey_;
+    std::unique_ptr<IInjectionService> injection_;
+    std::unique_ptr<IOverlayService> overlay_;
 
     bool recording_ = false;
-    std::string partial_text_; // currently displayed partial text
+    std::string partial_text_;
 };
 
 } // namespace verbal

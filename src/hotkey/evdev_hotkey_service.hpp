@@ -3,21 +3,21 @@
 #include "i_hotkey_service.hpp"
 #include "logger.hpp"
 
-#include <xcb/xcb.h>
-#include <xcb/xinput.h>
+#include <linux/input.h>
 
 #include <atomic>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace verbal {
 
-class XcbHotkeyService : public IHotkeyService {
+class EvdevHotkeyService : public IHotkeyService {
 public:
-    XcbHotkeyService();
-    ~XcbHotkeyService() override;
+    EvdevHotkeyService();
+    ~EvdevHotkeyService() override;
 
     // IService
     Result<void> start() override;
@@ -31,7 +31,7 @@ public:
     bool is_pressed() const override { return pressed_.load(std::memory_order_acquire); }
     bool any_modifiers_held() const override;
 
-    // For testing: simulate modifier state
+    // For testing: modifier state
     struct ModifierState {
         bool ctrl = false;
         bool super = false;
@@ -42,20 +42,31 @@ public:
     // Check if all required modifiers are active given current state
     bool check_modifiers(const ModifierState& state) const;
 
+    // For testing: process a single key event without hardware
+    // code: linux keycode, value: 0=release, 1=press, 2=repeat
+    void process_key_event(uint16_t code, int32_t value);
+
 private:
     void poll_thread_func();
-    ModifierState query_modifier_state() const;
+    bool is_keyboard_device(int fd);
+    ModifierState build_modifier_state() const;
 
-    // Map modifier name to XCB modifier mask bit
-    static uint16_t modifier_name_to_mask(const std::string& name);
+    // Map modifier name to set of linux keycodes
+    static std::vector<uint16_t> modifier_name_to_keycodes(const std::string& name);
+    static bool is_modifier_keycode(uint16_t code);
 
-    xcb_connection_t* connection_ = nullptr;
     std::vector<std::string> required_modifiers_;
-    uint16_t required_mask_ = 0;
     mutable std::mutex modifier_mutex_;
+
+    // Currently held key codes
+    std::unordered_set<uint16_t> held_keys_;
+    mutable std::mutex key_mutex_;
 
     VoidCallback on_press_;
     VoidCallback on_release_;
+
+    std::vector<int> device_fds_;
+    int wakeup_pipe_[2] = {-1, -1};
 
     std::thread poll_thread_;
     std::atomic<bool> running_{false};

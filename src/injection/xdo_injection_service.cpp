@@ -234,9 +234,8 @@ Result<void> XdoInjectionService::inject_via_xdo_lib(const std::string& text, Wi
 
     int ret = xdo_enter_text_window(xdo_, window, text.c_str(), 12000);
 
-    if (active_mods && nkeys > 0) {
-        xdo_set_active_modifiers(xdo_, window, active_mods, nkeys);
-    }
+    // Do NOT restore modifiers — the user's physical key state will naturally
+    // reassert if keys are still held. Restoring causes double-modifier issues.
     free(active_mods);
 
     if (ret != 0) {

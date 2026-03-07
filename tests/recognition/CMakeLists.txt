@@ -1,1 +1,2 @@
 verbal_add_test(test_transcription_orchestrator test_transcription_orchestrator.cpp verbal_recognition)
+target_include_directories(test_transcription_orchestrator PRIVATE ${CMAKE_SOURCE_DIR}/tests/mocks)

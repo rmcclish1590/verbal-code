@@ -1,6 +1,9 @@
 #include "gtk_overlay_service.hpp"
 
 #include <gdk/gdk.h>
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
 
 #include <algorithm>
 
@@ -47,6 +50,15 @@ void GtkOverlayService::stop() {
 }
 
 void GtkOverlayService::create_window() {
+    // Detect Wayland
+#ifdef GDK_WINDOWING_WAYLAND
+    GdkDisplay* default_display = gdk_display_get_default();
+    is_wayland_ = GDK_IS_WAYLAND_DISPLAY(default_display);
+#endif
+    if (is_wayland_) {
+        LOG_INFO(TAG, "Running on Wayland — some overlay features (position persistence, always-on-top) may be limited");
+    }
+
     window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_default_size(GTK_WINDOW(window_), window_size_, window_size_);
     gtk_widget_set_size_request(window_, window_size_, window_size_);
@@ -80,11 +92,13 @@ void GtkOverlayService::create_window() {
     gtk_widget_add_events(window_, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK
                                  | GDK_POINTER_MOTION_MASK | GDK_STRUCTURE_MASK);
 
-    // Set position
+    // Set position (gtk_window_move is a no-op on Wayland, but harmless)
     if (x_ < 0 || y_ < 0) {
         update_position_default();
     }
-    gtk_window_move(GTK_WINDOW(window_), x_, y_);
+    if (!is_wayland_) {
+        gtk_window_move(GTK_WINDOW(window_), x_, y_);
+    }
 }
 
 void GtkOverlayService::update_position_default() {
@@ -109,7 +123,7 @@ void GtkOverlayService::update_position_default() {
 void GtkOverlayService::show() {
     if (window_) {
         gtk_widget_show_all(window_);
-        if (x_ >= 0 && y_ >= 0) {
+        if (!is_wayland_ && x_ >= 0 && y_ >= 0) {
             gtk_window_move(GTK_WINDOW(window_), x_, y_);
         }
     }
@@ -131,7 +145,7 @@ void GtkOverlayService::set_state(OverlayState state) {
 void GtkOverlayService::set_position(int x, int y) {
     x_ = x;
     y_ = y;
-    if (window_) {
+    if (window_ && !is_wayland_) {
         gtk_window_move(GTK_WINDOW(window_), x_, y_);
     }
 }
@@ -171,14 +185,23 @@ gboolean GtkOverlayService::on_draw(GtkWidget* widget, cairo_t* cr, gpointer dat
     return FALSE;
 }
 
-gboolean GtkOverlayService::on_button_press(GtkWidget* /*widget*/, GdkEventButton* event, gpointer data) {
+gboolean GtkOverlayService::on_button_press(GtkWidget* widget, GdkEventButton* event, gpointer data) {
     auto* self = static_cast<GtkOverlayService*>(data);
 
     if (event->button == 1) {
-        // Left-click: begin manual drag (WM move drag doesn't work with DOCK hint)
-        self->dragging_ = true;
-        self->drag_offset_x_ = event->x;
-        self->drag_offset_y_ = event->y;
+        if (self->is_wayland_) {
+            // On Wayland, use compositor-assisted drag
+            gtk_window_begin_move_drag(GTK_WINDOW(widget),
+                static_cast<gint>(event->button),
+                static_cast<gint>(event->x_root),
+                static_cast<gint>(event->y_root),
+                event->time);
+        } else {
+            // X11: manual drag (WM move drag doesn't work with DOCK hint)
+            self->dragging_ = true;
+            self->drag_offset_x_ = event->x;
+            self->drag_offset_y_ = event->y;
+        }
     } else if (event->button == 3) {
         // Right-click: show context menu
         self->show_context_menu(event);
@@ -203,7 +226,7 @@ gboolean GtkOverlayService::on_button_release(GtkWidget* /*widget*/, GdkEventBut
 gboolean GtkOverlayService::on_motion_notify(GtkWidget* widget, GdkEventMotion* event, gpointer data) {
     auto* self = static_cast<GtkOverlayService*>(data);
 
-    if (self->dragging_) {
+    if (self->dragging_ && !self->is_wayland_) {
         int new_x = static_cast<int>(event->x_root - self->drag_offset_x_);
         int new_y = static_cast<int>(event->y_root - self->drag_offset_y_);
         gtk_window_move(GTK_WINDOW(widget), new_x, new_y);

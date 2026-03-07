@@ -21,6 +21,10 @@ public:
 
     // Get the final result after stopping
     virtual std::string final_result() = 0;
+
+    // Start/stop the streaming recognition thread
+    virtual void start_streaming() = 0;
+    virtual void stop_streaming() = 0;
 };
 
 } // namespace verbal

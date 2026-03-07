@@ -1,15 +1,11 @@
 #pragma once
 
-#include "vosk_recognition_service.hpp"
+#include "i_recognition_service.hpp"
+#include "i_refinement_service.hpp"
 #include "types.hpp"
 #include "result.hpp"
 
-#ifdef VERBAL_ENABLE_WHISPER
-#include "whisper_refinement_service.hpp"
-#endif
-
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,19 +22,14 @@ public:
     };
 
     TranscriptionOrchestrator(
-        VoskRecognitionService* vosk,
-#ifdef VERBAL_ENABLE_WHISPER
-        WhisperRefinementService* whisper,
-#endif
+        IRecognitionService* recognition,
+        IRefinementService* refinement,
         Config config);
 
     // Convenience: default config
     TranscriptionOrchestrator(
-        VoskRecognitionService* vosk
-#ifdef VERBAL_ENABLE_WHISPER
-        , WhisperRefinementService* whisper
-#endif
-    );
+        IRecognitionService* recognition,
+        IRefinementService* refinement = nullptr);
 
     // Callbacks
     using PartialCallback = std::function<void(const std::string& text)>;
@@ -64,10 +55,8 @@ public:
     static double edit_distance_ratio(const std::string& a, const std::string& b);
 
 private:
-    VoskRecognitionService* vosk_;
-#ifdef VERBAL_ENABLE_WHISPER
-    WhisperRefinementService* whisper_;
-#endif
+    IRecognitionService* recognition_;
+    IRefinementService* refinement_;
     Config config_;
 
     PartialCallback on_partial_;

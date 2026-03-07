@@ -21,6 +21,11 @@ public:
 
     // Current state
     virtual bool is_pressed() const = 0;
+
+    // Check if any modifier keys are still physically held (not just the
+    // hotkey combination). Default returns is_pressed() for backends that
+    // can't distinguish individual keys.
+    virtual bool any_modifiers_held() const { return is_pressed(); }
 };
 
 } // namespace verbal

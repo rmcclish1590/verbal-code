@@ -35,29 +35,20 @@ size_t levenshtein(const std::string& a, const std::string& b) {
 } // namespace
 
 TranscriptionOrchestrator::TranscriptionOrchestrator(
-    VoskRecognitionService* vosk,
-#ifdef VERBAL_ENABLE_WHISPER
-    WhisperRefinementService* whisper,
-#endif
+    IRecognitionService* recognition,
+    IRefinementService* refinement,
     Config config)
-    : vosk_(vosk)
-#ifdef VERBAL_ENABLE_WHISPER
-    , whisper_(whisper)
-#endif
+    : recognition_(recognition)
+    , refinement_(refinement)
     , config_(config)
 {
 }
 
 TranscriptionOrchestrator::TranscriptionOrchestrator(
-    VoskRecognitionService* vosk
-#ifdef VERBAL_ENABLE_WHISPER
-    , WhisperRefinementService* whisper
-#endif
-)
-    : vosk_(vosk)
-#ifdef VERBAL_ENABLE_WHISPER
-    , whisper_(whisper)
-#endif
+    IRecognitionService* recognition,
+    IRefinementService* refinement)
+    : recognition_(recognition)
+    , refinement_(refinement)
 {
 }
 
@@ -65,35 +56,34 @@ void TranscriptionOrchestrator::on_recording_start() {
     vosk_text_.clear();
     was_refined_ = false;
 
-    vosk_->reset();
+    recognition_->reset();
 
     // Wire up Vosk partial callback to our callback
-    vosk_->set_on_partial([this](const std::string& text) {
+    recognition_->set_on_partial([this](const std::string& text) {
         if (on_partial_) on_partial_(text);
     });
 
-    vosk_->set_on_final([this](const std::string& text) {
+    recognition_->set_on_final([this](const std::string& text) {
         vosk_text_ = text;
     });
 
-    vosk_->start_streaming();
+    recognition_->start_streaming();
     LOG_INFO(TAG, "Recording started");
 }
 
 void TranscriptionOrchestrator::on_recording_stop(const std::vector<AudioSample>& audio) {
-    vosk_->stop_streaming();
+    recognition_->stop_streaming();
 
     // Get Vosk's final result
-    std::string final_vosk = vosk_->final_result();
+    std::string final_vosk = recognition_->final_result();
     if (!final_vosk.empty()) {
         vosk_text_ = final_vosk;
     }
 
     LOG_INFO(TAG, "Vosk result: " + vosk_text_);
 
-#ifdef VERBAL_ENABLE_WHISPER
-    if (config_.enable_whisper_refinement && whisper_ && whisper_->is_initialized() && !audio.empty()) {
-        auto result = whisper_->refine(audio);
+    if (config_.enable_whisper_refinement && refinement_ && refinement_->is_initialized() && !audio.empty()) {
+        auto result = refinement_->refine(audio);
         if (result.is_ok()) {
             std::string whisper_text = result.value();
             double ratio = edit_distance_ratio(vosk_text_, whisper_text);
@@ -113,9 +103,6 @@ void TranscriptionOrchestrator::on_recording_stop(const std::vector<AudioSample>
             LOG_WARN(TAG, "Whisper refinement failed: " + result.error());
         }
     }
-#else
-    (void)audio;
-#endif
 
     // No refinement needed or available
     was_refined_ = false;

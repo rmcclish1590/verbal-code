@@ -34,9 +34,9 @@ public:
     // Set ring buffer to read from (alternative to feed_audio for streaming)
     void set_ring_buffer(RingBuffer<AudioSample>* buffer) { ring_buffer_ = buffer; }
 
-    // Start/stop the reader thread that pulls from ring buffer
-    void start_streaming();
-    void stop_streaming();
+    // IRecognitionService - start/stop the reader thread that pulls from ring buffer
+    void start_streaming() override;
+    void stop_streaming() override;
 
 private:
     void streaming_thread_func();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "i_refinement_service.hpp"
 #include "result.hpp"
 #include "types.hpp"
 
@@ -11,21 +12,17 @@ struct whisper_context;
 
 namespace verbal {
 
-class WhisperRefinementService {
+class WhisperRefinementService : public IRefinementService {
 public:
     explicit WhisperRefinementService(const std::string& model_path);
-    ~WhisperRefinementService();
+    ~WhisperRefinementService() override;
 
     WhisperRefinementService(const WhisperRefinementService&) = delete;
     WhisperRefinementService& operator=(const WhisperRefinementService&) = delete;
 
-    // Initialize whisper context
-    Result<void> init();
-
-    // Process audio and return refined transcription
-    Result<std::string> refine(const std::vector<AudioSample>& audio, int sample_rate = DEFAULT_SAMPLE_RATE);
-
-    bool is_initialized() const { return ctx_ != nullptr; }
+    Result<void> init() override;
+    Result<std::string> refine(const std::vector<AudioSample>& audio, int sample_rate = DEFAULT_SAMPLE_RATE) override;
+    bool is_initialized() const override { return ctx_ != nullptr; }
 
 private:
     std::string model_path_;

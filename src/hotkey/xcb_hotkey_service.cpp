@@ -87,7 +87,12 @@ void XcbHotkeyService::stop() {
     LOG_INFO(TAG, "XCB hotkey service stopped");
 }
 
-XcbHotkeyService::ModifierState XcbHotkeyService::query_modifier_state() {
+bool XcbHotkeyService::any_modifiers_held() const {
+    auto state = query_modifier_state();
+    return state.ctrl || state.alt || state.super || state.shift;
+}
+
+XcbHotkeyService::ModifierState XcbHotkeyService::query_modifier_state() const {
     ModifierState state;
     if (!connection_) return state;
 

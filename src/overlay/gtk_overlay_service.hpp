@@ -61,6 +61,7 @@ private:
     bool dragging_ = false;
     double drag_offset_x_ = 0;
     double drag_offset_y_ = 0;
+    bool is_wayland_ = false;
 
     GtkWidget* window_ = nullptr;
     std::atomic<bool> running_{false};

@@ -32,6 +32,8 @@ public:
     std::string transcriptions_path() const;
     int max_transcriptions() const;
 
+    std::string hotkey_trigger_key() const;
+
     // Setters
     void set_overlay_position(int x, int y);
     void set_hotkey_modifiers(const std::vector<std::string>& mods);
