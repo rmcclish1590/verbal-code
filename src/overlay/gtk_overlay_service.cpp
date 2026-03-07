@@ -394,19 +394,17 @@ void GtkOverlayService::show_history_dialog(const std::vector<std::string>& text
             GtkWidget* copy_btn = gtk_button_new_with_label("Copy");
             gtk_widget_set_valign(copy_btn, GTK_ALIGN_START);
 
-            // Allocate a copy of the string for the callback
-            std::string* text_copy = new std::string(*it);
-            g_signal_connect(copy_btn, "clicked",
+            // Use g_strdup + g_signal_connect_data for GLib-idiomatic lifetime management
+            gchar* text_copy = g_strdup(it->c_str());
+            g_signal_connect_data(
+                copy_btn, "clicked",
                 G_CALLBACK(+[](GtkWidget* /*btn*/, gpointer data) {
-                    auto* text = static_cast<std::string*>(data);
                     GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-                    gtk_clipboard_set_text(clipboard, text->c_str(), static_cast<gint>(text->size()));
-                }), text_copy);
-            // Free the string when the button is destroyed
-            g_signal_connect(copy_btn, "destroy",
-                G_CALLBACK(+[](GtkWidget* /*btn*/, gpointer data) {
-                    delete static_cast<std::string*>(data);
-                }), text_copy);
+                    gtk_clipboard_set_text(clipboard, static_cast<const gchar*>(data), -1);
+                }),
+                text_copy,
+                +[](gpointer data, GClosure*) { g_free(data); },
+                G_CONNECT_DEFAULT);
 
             gtk_container_add(GTK_CONTAINER(row), copy_btn);
             gtk_container_add(GTK_CONTAINER(list_box), frame);

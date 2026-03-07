@@ -12,6 +12,8 @@ extern "C" {
 
 namespace verbal {
 
+// X11 text injection service using libxdo.
+// Uses three fallback strategies: clipboard paste, xdotool type CLI, libxdo library.
 class XdoInjectionService : public IInjectionService {
 public:
     XdoInjectionService();
@@ -24,7 +26,7 @@ public:
 
     // IInjectionService
     Result<void> inject_text(const std::string& text) override;
-    bool has_focused_input() override;
+    bool has_focused_input() const override;
     Result<void> replace_last_injection(const std::string& new_text) override;
     size_t last_injection_length() const override { return last_injection_len_; }
 
@@ -35,11 +37,9 @@ private:
 
     xdo_t* xdo_ = nullptr;
     std::atomic<bool> running_{false};
-    bool wayland_ = false;
     bool has_xclip_ = false;
     bool has_xdotool_cli_ = false;
     size_t last_injection_len_ = 0;
-    std::string last_injection_text_;
 };
 
 } // namespace verbal

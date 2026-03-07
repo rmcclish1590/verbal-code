@@ -14,7 +14,7 @@ public:
     virtual Result<void> inject_text(const std::string& text) = 0;
 
     // Check if there is a focused input/text field
-    virtual bool has_focused_input() = 0;
+    virtual bool has_focused_input() const = 0;
 
     // Clear the last injected text (sends backspaces then retypes)
     virtual Result<void> replace_last_injection(const std::string& new_text) = 0;

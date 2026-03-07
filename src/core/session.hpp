@@ -5,6 +5,8 @@
 
 namespace verbal {
 
+// Display session type. UNKNOWN (unset or unrecognized XDG_SESSION_TYPE)
+// falls back to X11 backends in the application.
 enum class SessionType {
     X11,
     WAYLAND,

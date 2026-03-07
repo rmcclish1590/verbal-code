@@ -1,14 +1,11 @@
 #include "xcb_hotkey_service.hpp"
 
-#include <xcb/xcb.h>
-#include <xcb/xinput.h>
-
 #include <chrono>
 
 namespace verbal {
 
 namespace {
-constexpr const char* TAG = "Hotkey";
+constexpr const char* TAG = "XcbHotkey";
 
 // X11 modifier mask bits
 constexpr uint16_t CTRL_MASK  = XCB_MOD_MASK_CONTROL;
@@ -42,18 +39,7 @@ void XcbHotkeyService::set_modifiers(const std::vector<std::string>& modifiers) 
 
 bool XcbHotkeyService::check_modifiers(const ModifierState& state) const {
     std::lock_guard<std::mutex> lock(modifier_mutex_);
-    for (const auto& mod : required_modifiers_) {
-        if (mod == "ctrl" || mod == "control") {
-            if (!state.ctrl) return false;
-        } else if (mod == "alt") {
-            if (!state.alt) return false;
-        } else if (mod == "super" || mod == "meta") {
-            if (!state.super) return false;
-        } else if (mod == "shift") {
-            if (!state.shift) return false;
-        }
-    }
-    return !required_modifiers_.empty();
+    return check_modifiers_match(required_modifiers_, state);
 }
 
 Result<void> XcbHotkeyService::start() {
@@ -92,7 +78,7 @@ bool XcbHotkeyService::any_modifiers_held() const {
     return state.ctrl || state.alt || state.super || state.shift;
 }
 
-XcbHotkeyService::ModifierState XcbHotkeyService::query_modifier_state() const {
+ModifierState XcbHotkeyService::query_modifier_state() const {
     ModifierState state;
     if (!connection_) return state;
 

@@ -5,14 +5,14 @@
 #include <whisper.h>
 #endif
 
-#include <algorithm>
-#include <cmath>
 #include <vector>
 
 namespace verbal {
 
 namespace {
 constexpr const char* TAG = "Whisper";
+constexpr float PCM_INT16_SCALE = 32768.0f;
+constexpr int WHISPER_THREAD_COUNT = 4;
 } // namespace
 
 WhisperRefinementService::WhisperRefinementService(const std::string& model_path)
@@ -61,7 +61,7 @@ Result<std::string> WhisperRefinementService::refine(
     // Convert int16 PCM to float32 (whisper expects float in [-1, 1])
     std::vector<float> float_audio(audio.size());
     for (size_t i = 0; i < audio.size(); ++i) {
-        float_audio[i] = static_cast<float>(audio[i]) / 32768.0f;
+        float_audio[i] = static_cast<float>(audio[i]) / PCM_INT16_SCALE;
     }
 
     // Resample if needed (whisper.cpp expects 16kHz)
@@ -75,7 +75,7 @@ Result<std::string> WhisperRefinementService::refine(
     wparams.single_segment = true;
     wparams.no_context = true;
     wparams.language = "en";
-    wparams.n_threads = 4;
+    wparams.n_threads = WHISPER_THREAD_COUNT;
 
     int ret = whisper_full(ctx_, wparams, float_audio.data(), static_cast<int>(float_audio.size()));
     if (ret != 0) {
@@ -99,7 +99,7 @@ Result<std::string> WhisperRefinementService::refine(
         result = result.substr(start, end - start + 1);
     }
 
-    LOG_INFO(TAG, "Refined transcription: " + result);
+    LOG_DEBUG(TAG, "Refined transcription: " + result);
     return Result<std::string>::ok(std::move(result));
 #else
     (void)audio;

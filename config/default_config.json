@@ -1,6 +1,7 @@
 {
     "hotkey": {
-        "modifiers": ["ctrl", "super", "alt"]
+        "modifiers": ["ctrl", "super", "alt"],
+        "trigger_key": "v"
     },
     "audio": {
         "sample_rate": 16000,

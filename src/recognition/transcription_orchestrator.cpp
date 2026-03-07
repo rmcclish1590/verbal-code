@@ -44,14 +44,6 @@ TranscriptionOrchestrator::TranscriptionOrchestrator(
 {
 }
 
-TranscriptionOrchestrator::TranscriptionOrchestrator(
-    IRecognitionService* recognition,
-    IRefinementService* refinement)
-    : recognition_(recognition)
-    , refinement_(refinement)
-{
-}
-
 void TranscriptionOrchestrator::on_recording_start() {
     vosk_text_.clear();
     was_refined_ = false;

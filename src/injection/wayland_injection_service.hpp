@@ -8,6 +8,8 @@
 
 namespace verbal {
 
+// Wayland text injection service.
+// Uses wtype (direct Wayland virtual-keyboard) with wl-clipboard + ydotool as fallback.
 class WaylandInjectionService : public IInjectionService {
 public:
     WaylandInjectionService();
@@ -20,7 +22,7 @@ public:
 
     // IInjectionService
     Result<void> inject_text(const std::string& text) override;
-    bool has_focused_input() override;
+    bool has_focused_input() const override;
     Result<void> replace_last_injection(const std::string& new_text) override;
     size_t last_injection_length() const override { return last_injection_len_; }
 
@@ -41,7 +43,6 @@ private:
     bool has_ydotool_ = false;
     bool has_wtype_ = false;
     size_t last_injection_len_ = 0;
-    std::string last_injection_text_;
 };
 
 } // namespace verbal
