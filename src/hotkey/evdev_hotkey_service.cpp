@@ -174,7 +174,9 @@ void EvdevHotkeyService::stop() {
     // Wake up poll thread
     if (wakeup_pipe_[1] >= 0) {
         char c = 1;
-        (void)write(wakeup_pipe_[1], &c, 1);
+        if (write(wakeup_pipe_[1], &c, 1) == -1) {
+            // Best-effort wakeup; poll will exit via running_ flag
+        }
     }
 
     if (poll_thread_.joinable()) {
