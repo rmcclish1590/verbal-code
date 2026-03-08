@@ -26,11 +26,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Whisper.cpp v1.8.3 builds and loads models successfully with Vulkan iGPU acceleration enabled
   2. User can speak a test phrase and receive more accurate transcription than the current v1.7.3 baseline
   3. Initial_prompt parameter is functional and can accept vocabulary hints
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md — Upgrade whisper.cpp to v1.8.3 with Vulkan, initial_prompt, and thread auto-detect
+- [ ] 01-02-PLAN.md — Update download script, verify build, validate accuracy improvement
 
 ### Phase 2: Configuration and Vocabulary
 **Goal**: User preferences persist across sessions and custom word lists improve domain-specific accuracy
@@ -69,6 +69,6 @@ Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Recognition Upgrade | 0/0 | Not started | - |
+| 1. Recognition Upgrade | 0/2 | Planning complete | - |
 | 2. Configuration and Vocabulary | 0/0 | Not started | - |
 | 3. Settings UI and Overlay Polish | 0/0 | Not started | - |
