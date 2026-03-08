@@ -68,21 +68,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RECG-01 | — | Pending |
-| RECG-02 | — | Pending |
-| VOCB-01 | — | Pending |
-| VOCB-02 | — | Pending |
-| CONF-01 | — | Pending |
-| CONF-02 | — | Pending |
-| CONF-03 | — | Pending |
-| OVRL-01 | — | Pending |
-| OVRL-02 | — | Pending |
+| RECG-01 | Phase 1 | Pending |
+| RECG-02 | Phase 1 | Pending |
+| VOCB-01 | Phase 2 | Pending |
+| VOCB-02 | Phase 2 | Pending |
+| CONF-01 | Phase 2 | Pending |
+| CONF-02 | Phase 3 | Pending |
+| CONF-03 | Phase 3 | Pending |
+| OVRL-01 | Phase 3 | Pending |
+| OVRL-02 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 9 total
-- Mapped to phases: 0
-- Unmapped: 9
+- Mapped to phases: 9
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-07*
-*Last updated: 2026-03-07 after initial definition*
+*Last updated: 2026-03-07 after roadmap creation*
