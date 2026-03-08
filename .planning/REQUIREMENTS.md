@@ -10,7 +10,7 @@ Requirements for this refinement milestone. Each maps to roadmap phases.
 ### Recognition
 
 - [x] **RECG-01**: Upgrade whisper.cpp to v1.8.3 with Vulkan iGPU acceleration and initial_prompt support
-- [ ] **RECG-02**: Validate recognition accuracy improvement with upgraded model
+- [x] **RECG-02**: Validate recognition accuracy improvement with upgraded model
 
 ### Vocabulary
 
@@ -69,7 +69,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | RECG-01 | Phase 1 | Complete |
-| RECG-02 | Phase 1 | Pending |
+| RECG-02 | Phase 1 | Complete |
 | VOCB-01 | Phase 2 | Pending |
 | VOCB-02 | Phase 2 | Pending |
 | CONF-01 | Phase 2 | Pending |

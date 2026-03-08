@@ -12,7 +12,7 @@ This milestone takes verbal-code from a working prototype to a reliable daily-dr
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Recognition Upgrade** - Upgrade Whisper.cpp to v1.8.3 with Vulkan acceleration and validate accuracy improvement
+- [x] **Phase 1: Recognition Upgrade** - Upgrade Whisper.cpp to v1.8.3 with Vulkan acceleration and validate accuracy improvement (completed 2026-03-08)
 - [ ] **Phase 2: Configuration and Vocabulary** - Persist application settings and enable user-defined custom vocabulary
 - [ ] **Phase 3: Settings UI and Overlay Polish** - GTK3 settings window and refined floating widget with state indicators
 
@@ -69,6 +69,6 @@ Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Recognition Upgrade | 1/2 | In Progress|  |
+| 1. Recognition Upgrade | 2/2 | Complete   | 2026-03-08 |
 | 2. Configuration and Vocabulary | 0/0 | Not started | - |
 | 3. Settings UI and Overlay Polish | 0/0 | Not started | - |
