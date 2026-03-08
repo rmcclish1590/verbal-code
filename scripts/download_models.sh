@@ -76,47 +76,44 @@ else
     success "Vosk model installed: $VOSK_MODEL"
 fi
 
-# ── Whisper model ─────────────────────────────────────────
+# ── Whisper models (quantized, multi-model) ──────────────
 
-WHISPER_MODEL="ggml-base.en.bin"
-WHISPER_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_MODEL}"
-WHISPER_API_URL="https://huggingface.co/api/models/ggerganov/whisper.cpp"
-WHISPER_ETAG_FILE="$META_DIR/whisper-etag"
+WHISPER_BASE_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
-info "Checking for latest Whisper model..."
+# Associative array: model label -> filename
+declare -A WHISPER_MODELS=(
+    ["base.en-q5_1"]="ggml-base.en-q5_1.bin"
+    ["small.en-q5_1"]="ggml-small.en-q5_1.bin"
+    ["medium.en-q5_0"]="ggml-medium.en-q5_0.bin"
+)
 
-# Get the remote ETag to detect updates
-REMOTE_ETAG=""
-if command -v curl &>/dev/null; then
-    REMOTE_ETAG=$(curl -sI -L --max-time 10 "$WHISPER_URL" 2>/dev/null \
-        | grep -i "^etag:" | tail -1 | tr -d '\r' | sed 's/^[Ee][Tt][Aa][Gg]: *//' || true)
-fi
+info "Checking Whisper models..."
 
-LOCAL_ETAG=""
-if [ -f "$WHISPER_ETAG_FILE" ]; then
-    LOCAL_ETAG=$(cat "$WHISPER_ETAG_FILE")
-fi
+WHISPER_OK=0
+WHISPER_FAIL=0
 
-if [ -f "$MODELS_DIR/$WHISPER_MODEL" ]; then
-    if [ -n "$REMOTE_ETAG" ] && [ -n "$LOCAL_ETAG" ] && [ "$REMOTE_ETAG" = "$LOCAL_ETAG" ]; then
-        success "Whisper model is up to date: $WHISPER_MODEL"
-    elif [ -n "$REMOTE_ETAG" ] && [ "$REMOTE_ETAG" != "$LOCAL_ETAG" ]; then
-        info "Whisper model update detected, downloading: $WHISPER_MODEL..."
-        curl -L -o "$MODELS_DIR/$WHISPER_MODEL" "$WHISPER_URL"
-        echo "$REMOTE_ETAG" > "$WHISPER_ETAG_FILE"
-        success "Whisper model updated: $WHISPER_MODEL"
+for label in "${!WHISPER_MODELS[@]}"; do
+    filename="${WHISPER_MODELS[$label]}"
+    filepath="$MODELS_DIR/$filename"
+
+    if [ -f "$filepath" ] && [ -s "$filepath" ]; then
+        success "Whisper model already exists: $filename"
+        ((WHISPER_OK++))
+        continue
+    fi
+
+    info "Downloading Whisper model: $filename..."
+    if curl -L --fail --progress-bar -o "$filepath" "$WHISPER_BASE_URL/$filename"; then
+        success "Whisper model installed: $filename"
+        ((WHISPER_OK++))
     else
-        # Can't check remote — keep existing
-        success "Whisper model exists: $WHISPER_MODEL (could not check for updates)"
+        warn "Failed to download Whisper model: $filename"
+        rm -f "$filepath"
+        ((WHISPER_FAIL++))
     fi
-else
-    info "Downloading Whisper model: $WHISPER_MODEL..."
-    curl -L -o "$MODELS_DIR/$WHISPER_MODEL" "$WHISPER_URL"
-    if [ -n "$REMOTE_ETAG" ]; then
-        echo "$REMOTE_ETAG" > "$WHISPER_ETAG_FILE"
-    fi
-    success "Whisper model installed: $WHISPER_MODEL"
-fi
+done
+
+info "Whisper models: $WHISPER_OK downloaded, $WHISPER_FAIL failed"
 
 # ── Summary ───────────────────────────────────────────────
 
