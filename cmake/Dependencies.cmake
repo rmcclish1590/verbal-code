@@ -38,7 +38,17 @@ if(ENABLE_WHISPER)
     set(WHISPER_BUILD_TESTS OFF CACHE INTERNAL "")
     set(WHISPER_BUILD_EXAMPLES OFF CACHE INTERNAL "")
     set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
-    set(GGML_VULKAN ON CACHE INTERNAL "")
+
+    # Enable Vulkan GPU backend if SDK + shader compiler (glslc) are available
+    find_package(Vulkan QUIET COMPONENTS glslc)
+    if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
+        set(GGML_VULKAN ON CACHE INTERNAL "")
+        message(STATUS "Vulkan SDK found — enabling GGML_VULKAN for whisper.cpp")
+    else()
+        set(GGML_VULKAN OFF CACHE INTERNAL "")
+        message(STATUS "Vulkan SDK or glslc not found — building whisper.cpp without Vulkan")
+    endif()
+
     FetchContent_MakeAvailable(whisper)
 endif()
 

@@ -24,8 +24,15 @@ public:
     Result<std::string> refine(const std::vector<AudioSample>& audio, int sample_rate = DEFAULT_SAMPLE_RATE) override;
     bool is_initialized() const override { return ctx_ != nullptr; }
 
+    void set_initial_prompt(const std::string& prompt) override;
+    const std::string& get_initial_prompt() const { return initial_prompt_; }
+
+    /// Returns the auto-detected thread count (hardware_concurrency capped at 8, fallback 4).
+    int thread_count() const;
+
 private:
     std::string model_path_;
+    std::string initial_prompt_;
     ::whisper_context* ctx_ = nullptr;
 };
 

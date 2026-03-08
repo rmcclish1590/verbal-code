@@ -5,6 +5,8 @@
 #include <whisper.h>
 #endif
 
+#include <algorithm>
+#include <thread>
 #include <vector>
 
 namespace verbal {
@@ -12,7 +14,12 @@ namespace verbal {
 namespace {
 constexpr const char* TAG = "Whisper";
 constexpr float PCM_INT16_SCALE = 32768.0f;
-constexpr int WHISPER_THREAD_COUNT = 4;
+
+int auto_thread_count() {
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 4; // fallback
+    return static_cast<int>(std::min(hw, 8u));
+}
 } // namespace
 
 WhisperRefinementService::WhisperRefinementService(const std::string& model_path)
@@ -34,6 +41,8 @@ Result<void> WhisperRefinementService::init() {
     if (ctx_) return Result<void>::ok();
 
     struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = true;
+    cparams.flash_attn = true;
     ctx_ = whisper_init_from_file_with_params(model_path_.c_str(), cparams);
     if (!ctx_) {
         return Result<void>::err("Failed to load Whisper model from: " + model_path_);
@@ -75,7 +84,11 @@ Result<std::string> WhisperRefinementService::refine(
     wparams.single_segment = true;
     wparams.no_context = true;
     wparams.language = "en";
-    wparams.n_threads = WHISPER_THREAD_COUNT;
+    wparams.n_threads = auto_thread_count();
+
+    if (!initial_prompt_.empty()) {
+        wparams.initial_prompt = initial_prompt_.c_str();
+    }
 
     int ret = whisper_full(ctx_, wparams, float_audio.data(), static_cast<int>(float_audio.size()));
     if (ret != 0) {
@@ -106,6 +119,14 @@ Result<std::string> WhisperRefinementService::refine(
     (void)sample_rate;
     return Result<std::string>::err("Whisper support not compiled in");
 #endif
+}
+
+void WhisperRefinementService::set_initial_prompt(const std::string& prompt) {
+    initial_prompt_ = prompt;
+}
+
+int WhisperRefinementService::thread_count() const {
+    return auto_thread_count();
 }
 
 } // namespace verbal
