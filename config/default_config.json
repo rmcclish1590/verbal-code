@@ -9,7 +9,7 @@
     },
     "recognition": {
         "vosk_model": "vosk-model-small-en-us-0.15",
-        "whisper_model": "base.en",
+        "whisper_model": "small.en-q5_1",
         "enable_whisper_refinement": true
     },
     "overlay": {
