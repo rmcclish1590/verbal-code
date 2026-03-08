@@ -69,6 +69,6 @@ Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Recognition Upgrade | 0/2 | Planning complete | - |
+| 1. Recognition Upgrade | 1/2 | In Progress|  |
 | 2. Configuration and Vocabulary | 0/0 | Not started | - |
 | 3. Settings UI and Overlay Polish | 0/0 | Not started | - |
