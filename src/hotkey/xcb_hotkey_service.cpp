@@ -59,7 +59,7 @@ Result<void> XcbHotkeyService::start() {
 }
 
 void XcbHotkeyService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
 
     if (poll_thread_.joinable()) {
         poll_thread_.join();

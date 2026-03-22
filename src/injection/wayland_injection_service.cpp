@@ -49,7 +49,7 @@ Result<void> WaylandInjectionService::start() {
 }
 
 void WaylandInjectionService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
     LOG_INFO(TAG, "Wayland injection service stopped");
 }
 

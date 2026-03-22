@@ -48,9 +48,9 @@ Result<void> VoskRecognitionService::start() {
 }
 
 void VoskRecognitionService::stop() {
-    stop_streaming();
+    if (!running_.exchange(false)) return;
 
-    running_.store(false, std::memory_order_release);
+    stop_streaming();
 
     if (recognizer_) {
         vosk_recognizer_free(recognizer_);

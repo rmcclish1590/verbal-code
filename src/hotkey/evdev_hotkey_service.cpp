@@ -169,7 +169,7 @@ Result<void> EvdevHotkeyService::start() {
 }
 
 void EvdevHotkeyService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
 
     // Wake up poll thread
     if (wakeup_pipe_[1] >= 0) {

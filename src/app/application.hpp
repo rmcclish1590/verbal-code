@@ -15,6 +15,7 @@
 #include "i_injection_service.hpp"
 #include "i_overlay_service.hpp"
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -61,6 +62,7 @@ private:
     std::unique_ptr<IInjectionService> injection_;
     std::unique_ptr<IOverlayService> overlay_;
 
+    std::atomic<bool> quit_called_{false};
     bool recording_ = false;
 };
 

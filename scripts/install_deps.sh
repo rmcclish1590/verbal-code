@@ -7,6 +7,7 @@ sudo apt update
 sudo apt install -y \
     build-essential \
     cmake \
+    git \
     pkg-config \
     curl \
     unzip \

@@ -157,7 +157,7 @@ Result<void> XdoInjectionService::start() {
 }
 
 void XdoInjectionService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
     if (xdo_) {
         xdo_free(xdo_);
         xdo_ = nullptr;

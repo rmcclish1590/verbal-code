@@ -41,7 +41,7 @@ Result<void> GtkOverlayService::start() {
 }
 
 void GtkOverlayService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
     if (window_) {
         gtk_widget_destroy(window_);
         window_ = nullptr;

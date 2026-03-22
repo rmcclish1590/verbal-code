@@ -57,7 +57,7 @@ Result<void> PortalHotkeyService::start() {
 }
 
 void PortalHotkeyService::stop() {
-    running_.store(false, std::memory_order_release);
+    if (!running_.exchange(false)) return;
 
     if (loop_) {
         g_main_loop_quit(loop_);

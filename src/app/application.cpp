@@ -300,6 +300,8 @@ int Application::run() {
 }
 
 void Application::quit() {
+    if (quit_called_.exchange(true)) return;
+
 #ifdef VERBAL_HAS_OVERLAY
     if (overlay_) overlay_->stop();
     gtk_main_quit();
