@@ -98,18 +98,18 @@ for label in "${!WHISPER_MODELS[@]}"; do
 
     if [ -f "$filepath" ] && [ -s "$filepath" ]; then
         success "Whisper model already exists: $filename"
-        ((WHISPER_OK++))
+        ((++WHISPER_OK))
         continue
     fi
 
     info "Downloading Whisper model: $filename..."
     if curl -L --fail --progress-bar -o "$filepath" "$WHISPER_BASE_URL/$filename"; then
         success "Whisper model installed: $filename"
-        ((WHISPER_OK++))
+        ((++WHISPER_OK))
     else
         warn "Failed to download Whisper model: $filename"
         rm -f "$filepath"
-        ((WHISPER_FAIL++))
+        ((++WHISPER_FAIL))
     fi
 done
 
