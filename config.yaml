@@ -1,6 +1,6 @@
 hotkey:
-  push_to_talk: "Super_L"
-  toggle_mode: false
+  modifiers: ["ctrl", "super", "alt"]
+  key: "d"
 
 stt:
   engine: "whisper"

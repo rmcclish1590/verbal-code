@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 
 import yaml
@@ -52,6 +53,89 @@ def setup_logging(config: dict) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=handlers,
     )
+
+
+class VerbalCode:
+    MIN_AUDIO_SECONDS = 0.3
+
+    def __init__(self, config: dict):
+        from verbal_code.audio import AudioCapture
+        from verbal_code.hotkeys import HotkeyListener
+        from verbal_code.injector import TextProcessor, create_injector
+        from verbal_code.transcriber import create_transcriber
+
+        self.config = config
+        audio_cfg = config.get("audio", {})
+        hotkey_cfg = config.get("hotkey", {})
+
+        self.capture = AudioCapture(
+            sample_rate=audio_cfg.get("sample_rate", 16000),
+            channels=audio_cfg.get("channels", 1),
+            chunk_size=audio_cfg.get("chunk_size", 1024),
+            device_index=audio_cfg.get("device"),
+        )
+        self.transcriber = create_transcriber(config)
+        self.injector = create_injector(config)
+        self.text_processor = TextProcessor()
+        self.hotkey = HotkeyListener(
+            modifiers=hotkey_cfg.get("modifiers", ["ctrl", "super", "alt"]),
+            key=hotkey_cfg.get("key", "d"),
+            on_activate=self._on_dictation_start,
+            on_deactivate=self._on_dictation_stop,
+        )
+        self._dictation_lock = threading.Lock()
+        self._recording = False
+        self._record_start: float = 0
+
+    def start(self) -> None:
+        logger.info("Loading transcription model...")
+        self.transcriber.load_model()
+        self.hotkey.start()
+        logger.info("Starting Verbal Code v%s", __version__)
+        mods = "+".join(self.config.get("hotkey", {}).get("modifiers", ["ctrl", "super", "alt"]))
+        key = self.config.get("hotkey", {}).get("key", "d")
+        print(f"Verbal Code v{__version__} ready — hold {mods}+{key} to dictate")
+
+    def stop(self) -> None:
+        self.hotkey.stop()
+        if self._recording:
+            self.capture.stop()
+        logger.info("Shutting down")
+
+    def _on_dictation_start(self) -> None:
+        with self._dictation_lock:
+            if self._recording:
+                return
+            self._recording = True
+            self._record_start = time.monotonic()
+            self.text_processor.reset()
+            self.transcriber.reset()
+            self.capture.start()
+            logger.info("Dictation started")
+
+    def _on_dictation_stop(self) -> None:
+        with self._dictation_lock:
+            if not self._recording:
+                return
+            self._recording = False
+            audio = self.capture.stop()
+            duration = len(audio) / self.config.get("audio", {}).get("sample_rate", 16000)
+            logger.info("Dictation stopped (%.2fs of audio)", duration)
+
+        if duration < self.MIN_AUDIO_SECONDS:
+            logger.info("Audio too short (%.2fs), skipping transcription", duration)
+            return
+
+        text = self.transcriber.transcribe_batch(audio)
+        if not text.strip():
+            logger.info("No speech detected")
+            return
+
+        text = self.text_processor.process(text)
+        logger.info("Transcribed: %s", text)
+        time.sleep(0.05)
+        self.injector.inject(text)
+        logger.info("Text injected")
 
 
 def main():
@@ -127,8 +211,8 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    logger.info("Starting Verbal Code v%s", __version__)
-    print(f"Verbal Code v{__version__} ready")
+    app = VerbalCode(config)
+    app.start()
 
     while not _shutdown:
         try:
@@ -136,4 +220,4 @@ def main():
         except (KeyboardInterrupt, SystemExit):
             break
 
-    logger.info("Shutting down")
+    app.stop()
