@@ -64,9 +64,13 @@ class VerbalCode:
         from verbal_code.injector import TextProcessor, create_injector
         from verbal_code.transcriber import create_transcriber
 
+        from verbal_code.tray import SystemTray, TrayState
+        self._TrayState = TrayState
+
         self.config = config
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
+        tray_cfg = config.get("tray", {})
 
         self.capture = AudioCapture(
             sample_rate=audio_cfg.get("sample_rate", 16000),
@@ -83,6 +87,11 @@ class VerbalCode:
             on_activate=self._on_dictation_start,
             on_deactivate=self._on_dictation_stop,
         )
+        self.tray = SystemTray(
+            on_quit=self._on_tray_quit,
+            notifications=tray_cfg.get("notifications", True),
+        )
+        self._tray_enabled = tray_cfg.get("enabled", True)
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0
@@ -92,6 +101,8 @@ class VerbalCode:
     def start(self) -> None:
         logger.info("Loading transcription model...")
         self.transcriber.load_model()
+        if self._tray_enabled:
+            self.tray.start()
         self.hotkey.start()
         logger.info("Starting Verbal Code v%s", __version__)
         mods = "+".join(self.config.get("hotkey", {}).get("modifiers", ["ctrl", "super", "alt"]))
@@ -102,7 +113,12 @@ class VerbalCode:
         self.hotkey.stop()
         if self._recording:
             self.capture.stop()
+        self.tray.stop()
         logger.info("Shutting down")
+
+    def _on_tray_quit(self) -> None:
+        global _shutdown
+        _shutdown = True
 
     def _on_dictation_start(self) -> None:
         with self._dictation_lock:
@@ -116,6 +132,7 @@ class VerbalCode:
             self.capture.start()
             self._stream_thread = threading.Thread(target=self._streaming_loop, daemon=True)
             self._stream_thread.start()
+            self.tray.set_state(self._TrayState.LISTENING)
             logger.info("Dictation started")
 
     def _streaming_loop(self) -> None:
@@ -137,6 +154,7 @@ class VerbalCode:
             self._stream_stop.set()
             audio = self.capture.stop()
             duration = len(audio) / self.config.get("audio", {}).get("sample_rate", 16000)
+            self.tray.set_state(self._TrayState.PROCESSING)
             logger.info("Dictation stopped (%.2fs of audio)", duration)
 
         if self._stream_thread is not None:
@@ -145,11 +163,13 @@ class VerbalCode:
 
         if duration < self.MIN_AUDIO_SECONDS:
             logger.info("Audio too short (%.2fs), skipping transcription", duration)
+            self.tray.set_state(self._TrayState.IDLE)
             return
 
         text = self.transcriber.transcribe_batch(audio)
         if not text.strip():
             logger.info("No speech detected")
+            self.tray.set_state(self._TrayState.IDLE)
             return
 
         text = self.text_processor.process(text)
@@ -157,6 +177,7 @@ class VerbalCode:
         time.sleep(0.05)
         self.injector.inject(text)
         logger.info("Text injected")
+        self.tray.set_state(self._TrayState.IDLE)
 
 
 def main():
