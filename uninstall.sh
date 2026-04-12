@@ -68,6 +68,27 @@ else
     SKIPPED+=("launcher (not found)")
 fi
 
+# ── Remove desktop entry ──
+if [ -f "$HOME/.local/share/applications/verbal-code.desktop" ]; then
+    rm -f "$HOME/.local/share/applications/verbal-code.desktop"
+    ok "Removed desktop entry: ~/.local/share/applications/verbal-code.desktop"
+    REMOVED+=("desktop entry")
+else
+    SKIPPED+=("desktop entry (not found)")
+fi
+
+# ── Remove icon ──
+if [ -f "$HOME/.local/share/icons/hicolor/scalable/apps/verbal-code.svg" ]; then
+    rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/verbal-code.svg"
+    ok "Removed icon: ~/.local/share/icons/hicolor/scalable/apps/verbal-code.svg"
+    REMOVED+=("icon")
+else
+    SKIPPED+=("icon (not found)")
+fi
+
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+
 # ── Remove venv ──
 if [ -d "$HOME/.local/share/verbal-code" ]; then
     rm -rf "$HOME/.local/share/verbal-code"

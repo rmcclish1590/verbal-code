@@ -138,6 +138,34 @@ LAUNCHER_EOF
 chmod +x "$LAUNCHER"
 ok "Launcher created"
 
+# ── Desktop entry ──
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+DESKTOP_DIR="$HOME/.local/share/applications"
+
+info "Installing application icon..."
+mkdir -p "$ICON_DIR"
+cp "$SCRIPT_DIR/assets/verbal-code.svg" "$ICON_DIR/verbal-code.svg"
+ok "Icon installed"
+
+info "Creating desktop entry..."
+mkdir -p "$DESKTOP_DIR"
+cat > "$DESKTOP_DIR/verbal-code.desktop" << 'DESKTOP_EOF'
+[Desktop Entry]
+Type=Application
+Name=Verbal Code
+Comment=Voice-to-text for coding — speak and type
+Exec=bash -c '"$HOME/.local/bin/verbal-code"'
+Icon=verbal-code
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=voice;speech;dictation;transcription;microphone;
+StartupNotify=false
+DESKTOP_EOF
+ok "Desktop entry created"
+
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
 # ── PATH check ──
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
     warn "$HOME/.local/bin is not in your PATH"
