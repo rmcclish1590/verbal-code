@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--list-devices", action="store_true", help="List audio devices and exit")
     parser.add_argument("--test-audio", action="store_true", help="Record 3 seconds of audio and save to WAV")
     parser.add_argument("--test-transcribe", action="store_true", help="Record 5 seconds, transcribe, and print result")
+    parser.add_argument("--test-inject", action="store_true", help="Inject test text into focused window after 3s delay")
     parser.add_argument("--version", action="version", version=f"Verbal Code {__version__}")
     args = parser.parse_args()
 
@@ -112,6 +113,15 @@ def main():
         audio = capture.stop()
         text = transcriber.transcribe_batch(audio)
         print(f"\nTranscription: {text}")
+        sys.exit(0)
+
+    if args.test_inject:
+        from verbal_code.injector import create_injector
+        injector = create_injector(config)
+        print("Click into a text field... injecting in 3 seconds")
+        time.sleep(3)
+        injector.inject("Hello from Verbal Code! This is a test.")
+        print("Done!")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_signal)
