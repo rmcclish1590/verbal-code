@@ -1,0 +1,33 @@
+hotkey:
+  push_to_talk: "Super_L"
+  toggle_mode: false
+
+stt:
+  engine: "whisper"
+  model: "base"
+  language: "en"
+  device: "cpu"
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  device: null
+
+injection:
+  method: "auto"
+  delay_ms: 50
+
+vad:
+  enabled: true
+  threshold: 0.5
+  min_speech_ms: 250
+  min_silence_ms: 300
+
+tray:
+  enabled: true
+  icon: "default"
+
+logging:
+  level: "INFO"
+  file: null
