@@ -11,5 +11,8 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+[project.optional-dependencies]
+vosk = ["vosk>=0.3.45"]
+
 [project.scripts]
 verbal-code = "verbal_code.app:main"

@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -87,8 +88,96 @@ class WhisperTranscriber(TranscriberBase):
         pass
 
 
+class VoskTranscriber(TranscriberBase):
+    def __init__(self, model_name: str = "vosk-model-small-en-us-0.15", sample_rate: int = 16000):
+        self.model_name = model_name
+        self.sample_rate = sample_rate
+        self._model = None
+        self._recognizer = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _to_pcm(audio: np.ndarray) -> bytes:
+        return np.clip(audio * 32767, -32768, 32767).astype(np.int16).tobytes()
+
+    def load_model(self) -> None:
+        import vosk
+
+        vosk.SetLogLevel(-1)
+
+        model_dir = os.path.join(os.path.expanduser("~/.cache/verbal-code/models"), self.model_name)
+        logger.info("Loading Vosk model '%s'...", self.model_name)
+        t0 = time.monotonic()
+
+        if os.path.isdir(model_dir):
+            self._model = vosk.Model(model_path=model_dir)
+        else:
+            os.makedirs(os.path.dirname(model_dir), exist_ok=True)
+            logger.info("Model not found locally, downloading...")
+            self._model = vosk.Model(model_name=self.model_name)
+
+        elapsed = time.monotonic() - t0
+        logger.info("Vosk model loaded in %.2fs", elapsed)
+        self._new_recognizer()
+
+    def _new_recognizer(self) -> None:
+        import vosk
+        self._recognizer = vosk.KaldiRecognizer(self._model, self.sample_rate)
+        self._recognizer.SetWords(True)
+
+    def transcribe_batch(self, audio: np.ndarray) -> str:
+        if self._model is None:
+            self.load_model()
+
+        duration = len(audio) / self.sample_rate
+        logger.info("Transcribing %.2fs of audio (Vosk)...", duration)
+
+        t0 = time.monotonic()
+        pcm = self._to_pcm(audio)
+        chunk_size = 4000
+
+        with self._lock:
+            self._new_recognizer()
+            for i in range(0, len(pcm), chunk_size):
+                self._recognizer.AcceptWaveform(pcm[i:i + chunk_size])
+
+            import json
+            result = json.loads(self._recognizer.FinalResult())
+
+        elapsed = time.monotonic() - t0
+        text = result.get("text", "")
+        logger.info("Vosk transcription done in %.2fs", elapsed)
+        return text
+
+    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str]:
+        if self._model is None:
+            self.load_model()
+
+        import json
+        pcm = self._to_pcm(chunk)
+        with self._lock:
+            if self._recognizer.AcceptWaveform(pcm):
+                result = json.loads(self._recognizer.Result())
+                text = result.get("text", "")
+                if text:
+                    yield text
+
+    def reset(self) -> None:
+        if self._model is not None:
+            self._new_recognizer()
+
+
 def create_transcriber(config: dict) -> TranscriberBase:
     stt_cfg = config.get("stt", {})
+    engine = stt_cfg.get("engine", "whisper")
+
+    if engine == "vosk":
+        vosk_cfg = stt_cfg.get("vosk", {})
+        return VoskTranscriber(
+            model_name=vosk_cfg.get("model_name", "vosk-model-small-en-us-0.15"),
+            sample_rate=config.get("audio", {}).get("sample_rate", 16000),
+        )
+
     whisper_cfg = stt_cfg.get("whisper", {})
     return WhisperTranscriber(
         model_size=whisper_cfg.get("model", "base"),

@@ -10,6 +10,8 @@ stt:
     compute_type: "int8"
     language: "en"
     beam_size: 5
+  vosk:
+    model_name: "vosk-model-small-en-us-0.15"
 
 audio:
   sample_rate: 16000
