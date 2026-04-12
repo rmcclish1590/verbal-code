@@ -26,6 +26,24 @@ def _handle_signal(signum: int, frame: object) -> None:
     _shutdown = True
 
 
+def _config_candidates(path: str | None = None) -> list[str]:
+    """Return the ordered list of config file paths to search."""
+    candidates: list[str] = []
+    if path:
+        candidates.append(path)
+    candidates.append(os.path.expanduser("~/.config/verbal-code/config.yaml"))
+    candidates.append(os.path.join(os.getcwd(), "config.yaml"))
+    return candidates
+
+
+def resolve_config_path(path: str | None = None) -> str | None:
+    """Return the path to the first config file found, or ``None``."""
+    for candidate in _config_candidates(path):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def load_config(path: str | None = None) -> dict:
     """Load config from an explicit path, the XDG location, or the CWD.
 
@@ -34,13 +52,7 @@ def load_config(path: str | None = None) -> dict:
     2. ``~/.config/verbal-code/config.yaml``
     3. ``./config.yaml``
     """
-    candidates: list[str] = []
-    if path:
-        candidates.append(path)
-    candidates.append(os.path.expanduser("~/.config/verbal-code/config.yaml"))
-    candidates.append(os.path.join(os.getcwd(), "config.yaml"))
-
-    for candidate in candidates:
+    for candidate in _config_candidates(path):
         if os.path.isfile(candidate):
             with open(candidate) as f:
                 cfg = yaml.safe_load(f) or {}
@@ -119,7 +131,7 @@ class VerbalCode:
 
     MIN_AUDIO_SECONDS = 0.3
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, config_path: str | None = None):
         # Deferred imports keep startup fast and avoid circular dependencies
         # at module load time — all subsystems import from each other indirectly.
         from verbal_code.audio import AudioCapture
@@ -131,6 +143,9 @@ class VerbalCode:
 
         self._TrayState = TrayState
         self.config = config
+        self._config_path = config_path or os.path.expanduser(
+            "~/.config/verbal-code/config.yaml"
+        )
 
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
@@ -155,6 +170,7 @@ class VerbalCode:
         self._tray_enabled: bool = tray_cfg.get("enabled", True)
         self.tray = SystemTray(
             on_quit=self._on_tray_quit,
+            on_hotkeys=self._on_hotkeys_requested,
             notifications=tray_cfg.get("notifications", True),
         )
         self._vad_enabled: bool = vad_cfg.get("enabled", True)
@@ -199,6 +215,39 @@ class VerbalCode:
     def _on_tray_quit(self) -> None:
         global _shutdown
         _shutdown = True
+
+    def _on_hotkeys_requested(self) -> None:
+        from verbal_code.hotkey_editor import HotkeyEditorWindow
+
+        hotkey_cfg = self.config.get("hotkey", {})
+        editor = HotkeyEditorWindow(
+            gtk=self.tray._gtk,
+            gdk=self.tray._gdk,
+            current_modifiers=hotkey_cfg.get("modifiers", ["ctrl", "super", "alt"]),
+            current_key=hotkey_cfg.get("key", "d"),
+            config_path=self._config_path,
+            on_save=self._on_hotkey_saved,
+            on_recording_start=self.hotkey.stop,
+            on_recording_stop=self.hotkey.start,
+        )
+        editor.show()
+
+    def _on_hotkey_saved(self, modifiers: list[str], key: str) -> None:
+        from verbal_code.hotkeys import HotkeyListener
+
+        self.hotkey.stop()
+        self.config.setdefault("hotkey", {})["modifiers"] = modifiers
+        self.config["hotkey"]["key"] = key
+        self.hotkey = HotkeyListener(
+            modifiers=modifiers,
+            key=key,
+            on_activate=self._on_dictation_start,
+            on_deactivate=self._on_dictation_stop,
+        )
+        self.hotkey.start()
+        mods_str = "+".join(modifiers)
+        logger.info("Hotkey updated to %s+%s", mods_str, key)
+        self.tray.notify("Verbal Code", f"Hotkey changed to {mods_str}+{key}")
 
     def _on_dictation_start(self) -> None:
         with self._dictation_lock:
@@ -425,8 +474,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     validate_config(config)
 
+    config_path = resolve_config_path(args.config)
+
     try:
-        app = VerbalCode(config)
+        app = VerbalCode(config, config_path=config_path)
         app.start()
     except Exception as exc:
         logger.error("Failed to start: %s", exc)

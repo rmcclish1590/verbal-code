@@ -68,14 +68,17 @@ class SystemTray:
     def __init__(
         self,
         on_quit: Callable[[], None] | None = None,
+        on_hotkeys: Callable[[], None] | None = None,
         notifications: bool = True,
     ):
         self._on_quit = on_quit
+        self._on_hotkeys = on_hotkeys
         self._notifications = notifications
         self._indicator: Any = None
         self._status_item: Any = None
         self._available = False
         self._gtk: Any = None
+        self._gdk: Any = None
         self._glib: Any = None
 
     def start(self) -> None:
@@ -85,9 +88,10 @@ class SystemTray:
 
             gi.require_version("Gtk", "3.0")
             gi.require_version("AppIndicator3", "0.1")
-            from gi.repository import AppIndicator3, GLib, Gtk
+            from gi.repository import AppIndicator3, Gdk, GLib, Gtk
 
             self._gtk = Gtk
+            self._gdk = Gdk
             self._glib = GLib
         except (ImportError, ValueError) as exc:
             logger.warning(
@@ -110,6 +114,12 @@ class SystemTray:
         self._status_item = self._gtk.MenuItem(label="Verbal Code \u2014 Idle")
         self._status_item.set_sensitive(False)
         menu.append(self._status_item)
+
+        menu.append(self._gtk.SeparatorMenuItem())
+
+        hotkeys_item = self._gtk.MenuItem(label="Hotkeys...")
+        hotkeys_item.connect("activate", self._on_hotkeys_clicked)
+        menu.append(hotkeys_item)
 
         menu.append(self._gtk.SeparatorMenuItem())
 
@@ -158,6 +168,10 @@ class SystemTray:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             logger.debug("notify-send not available")
+
+    def _on_hotkeys_clicked(self, _widget: Any) -> None:
+        if self._on_hotkeys:
+            self._on_hotkeys()
 
     def _on_quit_clicked(self, _widget: Any) -> None:
         if self._on_quit:
