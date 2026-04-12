@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+verbal_code/__init__.py
+verbal_code/__main__.py
+verbal_code/app.py
+verbal_code/audio.py
+verbal_code/hotkeys.py
+verbal_code/injector.py
+verbal_code/transcriber.py
+verbal_code/tray.py
+verbal_code/vad.py
+verbal_code.egg-info/PKG-INFO
+verbal_code.egg-info/SOURCES.txt
+verbal_code.egg-info/dependency_links.txt
+verbal_code.egg-info/entry_points.txt
+verbal_code.egg-info/requires.txt
+verbal_code.egg-info/top_level.txt

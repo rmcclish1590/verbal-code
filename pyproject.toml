@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "verbal-code"
@@ -10,6 +10,9 @@ dependencies = [
     "PyYAML>=6.0",
     "numpy>=1.24",
 ]
+
+[tool.setuptools.packages.find]
+include = ["verbal_code*"]
 
 [project.optional-dependencies]
 vosk = ["vosk>=0.3.45"]

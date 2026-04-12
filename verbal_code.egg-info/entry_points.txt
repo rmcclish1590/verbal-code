@@ -1,0 +1,2 @@
+[console_scripts]
+verbal-code = verbal_code.app:main

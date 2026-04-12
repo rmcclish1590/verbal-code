@@ -39,6 +39,41 @@ def load_config(path: str | None = None) -> dict:
     return {}
 
 
+_KNOWN_SECTIONS = {"hotkey", "stt", "audio", "injection", "vad", "tray", "logging"}
+
+
+def validate_config(config: dict) -> None:
+    unknown = set(config.keys()) - _KNOWN_SECTIONS
+    if unknown:
+        logger.warning("Unknown config sections: %s", ", ".join(sorted(unknown)))
+
+    for section in ("hotkey", "stt", "audio"):
+        if section not in config:
+            logger.warning("Missing config section '%s', using defaults", section)
+
+    engine = config.get("stt", {}).get("engine", "whisper")
+    if engine == "whisper":
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            logger.error(
+                "faster-whisper is not installed. Install it with:\n"
+                "  pip install faster-whisper\n"
+                "Or run ./install.sh to set up everything."
+            )
+            sys.exit(1)
+    elif engine == "vosk":
+        try:
+            import vosk  # noqa: F401
+        except ImportError:
+            logger.error(
+                "vosk is not installed. Install it with:\n"
+                "  pip install vosk\n"
+                "Or run ./install.sh to set up everything."
+            )
+            sys.exit(1)
+
+
 def setup_logging(config: dict) -> None:
     log_cfg = config.get("logging", {})
     level = log_cfg.get("level", "INFO").upper()
@@ -184,7 +219,14 @@ class VerbalCode:
             self.tray.set_state(self._TrayState.IDLE)
             return
 
-        text = self.transcriber.transcribe_batch(audio)
+        try:
+            text = self.transcriber.transcribe_batch(audio)
+        except Exception as e:
+            logger.error("Transcription failed: %s", e)
+            self.tray.set_state(self._TrayState.ERROR)
+            self.tray.notify("Verbal Code", f"Transcription error: {e}")
+            return
+
         if not text.strip():
             logger.info("No speech detected")
             self.tray.set_state(self._TrayState.IDLE)
@@ -193,8 +235,16 @@ class VerbalCode:
         text = self.text_processor.process(text)
         logger.info("Transcribed: %s", text)
         time.sleep(0.05)
-        self.injector.inject(text)
-        logger.info("Text injected")
+
+        try:
+            self.injector.inject(text)
+            logger.info("Text injected")
+        except Exception as e:
+            logger.error("Injection failed: %s", e)
+            self.tray.set_state(self._TrayState.ERROR)
+            self.tray.notify("Verbal Code", f"Injection error: {e}")
+            return
+
         self.tray.set_state(self._TrayState.IDLE)
 
 
@@ -271,8 +321,21 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    app = VerbalCode(config)
-    app.start()
+    validate_config(config)
+
+    try:
+        app = VerbalCode(config)
+    except Exception as e:
+        logger.error("Failed to initialize: %s", e)
+        sys.exit(1)
+
+    try:
+        app.start()
+    except Exception as e:
+        logger.error("Failed to start: %s", e)
+        app.tray.set_state(app._TrayState.ERROR)
+        app.tray.notify("Verbal Code", f"Startup failed: {e}")
+        sys.exit(1)
 
     while not _shutdown:
         try:
