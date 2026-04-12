@@ -65,12 +65,14 @@ class VerbalCode:
         from verbal_code.transcriber import create_transcriber
 
         from verbal_code.tray import SystemTray, TrayState
+        from verbal_code.vad import VoiceActivityDetector
         self._TrayState = TrayState
 
         self.config = config
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
         tray_cfg = config.get("tray", {})
+        vad_cfg = config.get("vad", {})
 
         self.capture = AudioCapture(
             sample_rate=audio_cfg.get("sample_rate", 16000),
@@ -92,6 +94,13 @@ class VerbalCode:
             notifications=tray_cfg.get("notifications", True),
         )
         self._tray_enabled = tray_cfg.get("enabled", True)
+        self._vad_enabled = vad_cfg.get("enabled", True)
+        self.vad = VoiceActivityDetector(
+            threshold=vad_cfg.get("threshold", 0.5),
+            min_speech_ms=vad_cfg.get("min_speech_ms", 250),
+            silence_ms=vad_cfg.get("silence_ms", 500),
+            sample_rate=audio_cfg.get("sample_rate", 16000),
+        ) if self._vad_enabled else None
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0
@@ -128,6 +137,8 @@ class VerbalCode:
             self._record_start = time.monotonic()
             self.text_processor.reset()
             self.transcriber.reset()
+            if self.vad:
+                self.vad.reset()
             self._stream_stop.clear()
             self.capture.start()
             self._stream_thread = threading.Thread(target=self._streaming_loop, daemon=True)
@@ -140,6 +151,13 @@ class VerbalCode:
             chunk = self.capture.get_chunk(timeout=0.1)
             if chunk is None:
                 continue
+
+            if self.vad and self.vad.available:
+                speech = self.vad.process_chunk(chunk)
+                if speech is None:
+                    continue
+                chunk = speech
+
             for text in self.transcriber.transcribe_stream(chunk):
                 if text:
                     logger.debug("[stream] %s", text)
