@@ -62,6 +62,7 @@ def main():
     parser.add_argument("-c", "--config", help="Path to config.yaml")
     parser.add_argument("--list-devices", action="store_true", help="List audio devices and exit")
     parser.add_argument("--test-audio", action="store_true", help="Record 3 seconds of audio and save to WAV")
+    parser.add_argument("--test-transcribe", action="store_true", help="Record 5 seconds, transcribe, and print result")
     parser.add_argument("--version", action="version", version=f"Verbal Code {__version__}")
     args = parser.parse_args()
 
@@ -90,6 +91,27 @@ def main():
         AudioCapture.save_wav(out_path, audio, sample_rate=audio_cfg.get("sample_rate", 16000))
         duration = len(audio) / audio_cfg.get("sample_rate", 16000)
         print(f"Saved {duration:.2f}s of audio to {out_path}")
+        sys.exit(0)
+
+    if args.test_transcribe:
+        from verbal_code.audio import AudioCapture
+        from verbal_code.transcriber import create_transcriber
+
+        audio_cfg = config.get("audio", {})
+        capture = AudioCapture(
+            sample_rate=audio_cfg.get("sample_rate", 16000),
+            channels=audio_cfg.get("channels", 1),
+            chunk_size=audio_cfg.get("chunk_size", 1024),
+            device_index=audio_cfg.get("device"),
+        )
+        transcriber = create_transcriber(config)
+        transcriber.load_model()
+        print("Recording 5 seconds... speak now!")
+        capture.start()
+        time.sleep(5)
+        audio = capture.stop()
+        text = transcriber.transcribe_batch(audio)
+        print(f"\nTranscription: {text}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_signal)

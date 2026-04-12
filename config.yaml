@@ -4,9 +4,12 @@ hotkey:
 
 stt:
   engine: "whisper"
-  model: "base"
-  language: "en"
-  device: "cpu"
+  whisper:
+    model: "base"
+    device: "auto"
+    compute_type: "int8"
+    language: "en"
+    beam_size: 5
 
 audio:
   sample_rate: 16000
