@@ -86,6 +86,8 @@ class VerbalCode:
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0
+        self._stream_stop = threading.Event()
+        self._stream_thread: threading.Thread | None = None
 
     def start(self) -> None:
         logger.info("Loading transcription model...")
@@ -110,17 +112,36 @@ class VerbalCode:
             self._record_start = time.monotonic()
             self.text_processor.reset()
             self.transcriber.reset()
+            self._stream_stop.clear()
             self.capture.start()
+            self._stream_thread = threading.Thread(target=self._streaming_loop, daemon=True)
+            self._stream_thread.start()
             logger.info("Dictation started")
+
+    def _streaming_loop(self) -> None:
+        while not self._stream_stop.is_set():
+            chunk = self.capture.get_chunk(timeout=0.1)
+            if chunk is None:
+                continue
+            for text in self.transcriber.transcribe_stream(chunk):
+                if text:
+                    logger.debug("[stream] %s", text)
+                    # Uncomment the next line to enable live injection of partial results:
+                    # self.injector.inject(self.text_processor.process(text))
 
     def _on_dictation_stop(self) -> None:
         with self._dictation_lock:
             if not self._recording:
                 return
             self._recording = False
+            self._stream_stop.set()
             audio = self.capture.stop()
             duration = len(audio) / self.config.get("audio", {}).get("sample_rate", 16000)
             logger.info("Dictation stopped (%.2fs of audio)", duration)
+
+        if self._stream_thread is not None:
+            self._stream_thread.join(timeout=2.0)
+            self._stream_thread = None
 
         if duration < self.MIN_AUDIO_SECONDS:
             logger.info("Audio too short (%.2fs), skipping transcription", duration)

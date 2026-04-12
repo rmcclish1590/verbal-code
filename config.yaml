@@ -34,5 +34,5 @@ tray:
   icon: "default"
 
 logging:
-  level: "INFO"
+  level: "DEBUG"
   file: null

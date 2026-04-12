@@ -40,6 +40,10 @@ class WhisperTranscriber(TranscriberBase):
         self.beam_size = beam_size
         self._model = None
         self._lock = threading.Lock()
+        self._stream_buffer: list[np.ndarray] = []
+        self._stream_samples = 0
+        self._last_stream_text = ""
+        self._stream_interval_samples = int(1.5 * 16000)
 
     def load_model(self) -> None:
         from faster_whisper import WhisperModel
@@ -82,10 +86,38 @@ class WhisperTranscriber(TranscriberBase):
         return text
 
     def transcribe_stream(self, chunk: np.ndarray) -> Generator[str]:
-        yield ""
+        if self._model is None:
+            self.load_model()
+
+        self._stream_buffer.append(chunk)
+        self._stream_samples += len(chunk)
+
+        if self._stream_samples < self._stream_interval_samples:
+            return
+
+        audio = np.concatenate(self._stream_buffer)
+        stream_beam = max(1, self.beam_size // 2)
+
+        with self._lock:
+            segments, _ = self._model.transcribe(
+                audio,
+                language=self.language,
+                beam_size=stream_beam,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 300},
+            )
+            full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
+
+        if full_text and full_text != self._last_stream_text:
+            delta = full_text[len(self._last_stream_text):].strip() if full_text.startswith(self._last_stream_text) else full_text
+            self._last_stream_text = full_text
+            if delta:
+                yield delta
 
     def reset(self) -> None:
-        pass
+        self._stream_buffer = []
+        self._stream_samples = 0
+        self._last_stream_text = ""
 
 
 class VoskTranscriber(TranscriberBase):
