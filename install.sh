@@ -112,9 +112,21 @@ case "$STT_CHOICE" in
         ;;
 esac
 
+# ── Optional: Voice Activity Detection ──
+echo ""
+read -rp "Install Silero VAD for speech detection? (~2GB, requires torch) [y/N]: " VAD_CHOICE
+if [[ "${VAD_CHOICE,,}" == "y" ]]; then
+    info "Installing silero-vad (this may take a while)..."
+    "$PIP" install --quiet silero-vad
+    ok "silero-vad installed"
+else
+    info "Skipping VAD — you can install later with: $PIP install silero-vad"
+fi
+
 # ── Install verbal-code package ──
 info "Installing verbal-code in editable mode..."
 "$PIP" install --quiet -e "$SCRIPT_DIR"
+"$PIP" install --quiet pytest
 ok "verbal-code package installed"
 
 # ── Config file ──

@@ -33,6 +33,12 @@ Then run:
 verbal-code
 ```
 
+To uninstall completely:
+
+```bash
+./uninstall.sh
+```
+
 ## Configuration
 
 Config lives at `~/.config/verbal-code/config.yaml`. Key settings:
@@ -122,8 +128,11 @@ logging:
 
 ```
 verbal-code/
-├── config.yaml          # Default configuration
+├── assets/
+│   └── verbal-code.svg  # Application icon (installed to ~/.local/share/icons/)
+├── config.yaml          # Default configuration (copied to ~/.config/verbal-code/ on install)
 ├── install.sh           # One-step installer
+├── uninstall.sh         # Full uninstaller (removes venv, config, cache, launcher)
 ├── pyproject.toml       # Python package definition
 ├── requirements.txt     # Dependencies
 └── verbal_code/

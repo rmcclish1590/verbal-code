@@ -23,8 +23,15 @@ _SPECIAL_KEY_MAP: dict[str, Key] = {
     "escape": Key.esc,
 }
 
+_PynputKey = Key | KeyCode | None
 
-def _normalize_key(key) -> Key | str | None:
+
+def _normalize_key(key: _PynputKey) -> Key | str | None:
+    """Reduce a raw pynput key event to a canonical Key or lowercase string.
+
+    Returns None for key codes that cannot be represented (e.g. out-of-range
+    virtual key values).
+    """
     if isinstance(key, Key):
         return key
     if isinstance(key, KeyCode) and key.char:
@@ -38,6 +45,13 @@ def _normalize_key(key) -> Key | str | None:
 
 
 class HotkeyListener:
+    """Listens for a configurable modifier+key combo and fires callbacks.
+
+    Activates when all required modifiers and the trigger key are held down
+    simultaneously.  Deactivates as soon as any part of the combo is released.
+    Callbacks run on daemon threads so they do not block the listener loop.
+    """
+
     def __init__(
         self,
         modifiers: list[str],
@@ -59,9 +73,10 @@ class HotkeyListener:
 
     @property
     def is_active(self) -> bool:
+        """True while the hotkey combo is fully held down."""
         return self._active
 
-    def _modifier_name(self, key) -> str | None:
+    def _modifier_name(self, key: _PynputKey) -> str | None:
         if isinstance(key, Key):
             for name, variants in _MODIFIER_MAP.items():
                 if key in variants:
@@ -69,12 +84,11 @@ class HotkeyListener:
         return None
 
     def _check_combo(self) -> bool:
-        return (
-            self._trigger_held
-            and all(m in self._pressed_modifiers for m in self._required_modifiers)
+        return self._trigger_held and all(
+            m in self._pressed_modifiers for m in self._required_modifiers
         )
 
-    def _on_press(self, key):
+    def _on_press(self, key: _PynputKey) -> None:
         with self._lock:
             mod = self._modifier_name(key)
             if mod:
@@ -88,7 +102,7 @@ class HotkeyListener:
                 self._active = True
                 threading.Thread(target=self._on_activate, daemon=True).start()
 
-    def _on_release(self, key):
+    def _on_release(self, key: _PynputKey) -> None:
         with self._lock:
             was_active = self._active
 
@@ -105,6 +119,7 @@ class HotkeyListener:
                 threading.Thread(target=self._on_deactivate, daemon=True).start()
 
     def start(self) -> None:
+        """Attach the pynput listener and begin monitoring keyboard events."""
         self._listener = Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -117,6 +132,7 @@ class HotkeyListener:
         logger.info("Hotkey listener started: %s+%s", mods, key_name)
 
     def stop(self) -> None:
+        """Stop monitoring keyboard events and clean up the listener."""
         if self._listener:
             self._listener.stop()
             self._listener = None

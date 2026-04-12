@@ -4,4 +4,4 @@ sounddevice>=0.4.6
 faster-whisper>=1.0.0
 pynput>=1.7.6
 # vosk>=0.3.45  # optional: lightweight STT backend
-# torch>=2.0  # optional: required for Silero VAD
+# silero-vad>=5.1  # optional: voice activity detection (pulls in torch)

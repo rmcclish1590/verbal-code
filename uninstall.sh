@@ -116,6 +116,16 @@ else
     SKIPPED+=("cache (not found)")
 fi
 
+# ── Silero VAD model cache ──
+SILERO_CACHE="$HOME/.cache/torch/hub/snakers4_silero-vad_master"
+if [ -d "$SILERO_CACHE" ]; then
+    rm -rf "$SILERO_CACHE"
+    ok "Removed Silero VAD cache: $SILERO_CACHE"
+    REMOVED+=("silero-vad cache")
+else
+    SKIPPED+=("silero-vad cache (not found)")
+fi
+
 # ── Whisper models (separate prompt) ──
 HF_MODELS=("$HOME"/.cache/huggingface/hub/models--Systran--faster-whisper-*)
 HF_FOUND=false

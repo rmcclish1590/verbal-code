@@ -31,7 +31,7 @@ vad:
 
 tray:
   enabled: true
-  icon: "default"
+  notifications: true
 
 logging:
   level: "INFO"

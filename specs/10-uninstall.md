@@ -7,23 +7,23 @@ Create `uninstall.sh` that completely removes all verbal_code files, the virtual
 - Slice 9 (install script — this mirrors everything it creates)
 
 ## What the Installer Creates (must all be removed)
-- `~/.local/share/verbal_code/venv/` — Python virtual environment
-- `~/.config/verbal_code/config.yaml` — user configuration
-- `~/.cache/verbal_code/models/` — downloaded Vosk models
-- `~/.cache/verbal_code/icons/` — system tray SVG icons
-- `~/.local/bin/verbal_code` — launcher script
+- `~/.local/share/verbal-code/venv/` — Python virtual environment
+- `~/.config/verbal-code/config.yaml` — user configuration
+- `~/.cache/verbal-code/models/` — downloaded Vosk models
+- `~/.cache/verbal-code/icons/` — system tray SVG icons
+- `~/.local/bin/verbal-code` — launcher script
 - `~/.cache/huggingface/hub/models--Systran--faster-whisper-*` — downloaded Whisper models (via huggingface hub)
 
 ## Acceptance Criteria
 - [ ] `uninstall.sh` at project root, executable (`chmod +x`)
 - [ ] Colored output matching `install.sh` style ([INFO], [OK], [WARN] prefixes)
-- [ ] Checks if verbal_code is currently running (`pgrep -f verbal_code`), warns and offers to kill it
-- [ ] Prompts for confirmation before doing anything: "This will remove verbal_code and all its data. Continue? [y/N]"
+- [ ] Checks if verbal-code is currently running (`pgrep -f "python.*verbal_code"`), warns and offers to kill it
+- [ ] Prompts for confirmation before doing anything: "This will remove Verbal Code and all its data. Continue? [y/N]"
 - [ ] Removes these paths (each with an existence check, logged individually):
-  - `~/.local/bin/verbal_code` (launcher)
-  - `~/.local/share/verbal_code/` (venv and all contents)
-  - `~/.config/verbal_code/` (config directory)
-  - `~/.cache/verbal_code/` (models and icons)
+  - `~/.local/bin/verbal-code` (launcher)
+  - `~/.local/share/verbal-code/` (venv and all contents)
+  - `~/.config/verbal-code/` (config directory)
+  - `~/.cache/verbal-code/` (models and icons)
 - [ ] Asks separately about Whisper model cache: "Remove downloaded Whisper models from ~/.cache/huggingface? These are large and shared with other apps. [y/N]"
   - If yes, removes only `~/.cache/huggingface/hub/models--Systran--faster-whisper-*` (glob match), NOT the entire huggingface cache
 - [ ] Does NOT remove system apt packages (xdotool, xclip, etc.) — they may be used by other apps. Prints a note listing them in case the user wants to remove them manually.
@@ -47,19 +47,19 @@ Create `uninstall.sh` that completely removes all verbal_code files, the virtual
 ```bash
 # Install first, then uninstall:
 ./install.sh
-ls ~/.local/bin/verbal_code          # exists
-ls ~/.local/share/verbal_code/       # exists
-ls ~/.config/verbal_code/            # exists
+ls ~/.local/bin/verbal-code          # exists
+ls ~/.local/share/verbal-code/       # exists
+ls ~/.config/verbal-code/            # exists
 
 chmod +x uninstall.sh
 ./uninstall.sh
 
-ls ~/.local/bin/verbal_code          # gone
-ls ~/.local/share/verbal_code/       # gone
-ls ~/.config/verbal_code/            # gone
-ls ~/.cache/verbal_code/             # gone
+ls ~/.local/bin/verbal-code          # gone
+ls ~/.local/share/verbal-code/       # gone
+ls ~/.config/verbal-code/            # gone
+ls ~/.cache/verbal-code/             # gone
 
 # Verify nothing is left:
-find ~ -name "*verbal_code*" 2>/dev/null
+find ~ -name "*verbal-code*" 2>/dev/null
 # Should only show the source code directory
 ```
