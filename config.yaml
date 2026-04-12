@@ -1,6 +1,6 @@
 hotkey:
-  modifiers: ["ctrl", "super", "alt"]
-  key: "d"
+  modifiers: ["super", "alt"]
+  key: "space"
 
 stt:
   engine: "whisper"

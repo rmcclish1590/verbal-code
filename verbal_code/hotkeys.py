@@ -14,6 +14,15 @@ _MODIFIER_MAP: dict[str, set[Key]] = {
     "meta": {Key.cmd_l, Key.cmd_r},
 }
 
+_SPECIAL_KEY_MAP: dict[str, Key] = {
+    "space": Key.space,
+    "tab": Key.tab,
+    "enter": Key.enter,
+    "backspace": Key.backspace,
+    "esc": Key.esc,
+    "escape": Key.esc,
+}
+
 
 def _normalize_key(key) -> Key | str | None:
     if isinstance(key, Key):
@@ -37,7 +46,8 @@ class HotkeyListener:
         on_deactivate: Callable[[], None],
     ):
         self._required_modifiers = modifiers
-        self._trigger_key = key.lower()
+        key_lower = key.lower()
+        self._trigger_key: Key | str = _SPECIAL_KEY_MAP.get(key_lower, key_lower)
         self._on_activate = on_activate
         self._on_deactivate = on_deactivate
 
@@ -102,7 +112,9 @@ class HotkeyListener:
         self._listener.daemon = True
         self._listener.start()
         mods = "+".join(self._required_modifiers)
-        logger.info("Hotkey listener started: %s+%s", mods, self._trigger_key)
+        trigger = self._trigger_key
+        key_name = trigger if isinstance(trigger, str) else trigger.name
+        logger.info("Hotkey listener started: %s+%s", mods, key_name)
 
     def stop(self) -> None:
         if self._listener:
