@@ -19,7 +19,7 @@ include = ["verbal_code*"]
 
 [project.optional-dependencies]
 vosk = ["vosk>=0.3.45"]
-vad = ["silero-vad>=5.1"]
+moonshine = ["useful-moonshine-onnx>=20251121"]
 
 [project.scripts]
 verbal-code = "verbal_code.app:main"

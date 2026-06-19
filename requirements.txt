@@ -4,4 +4,4 @@ sounddevice>=0.4.6
 faster-whisper>=1.0.0
 pynput>=1.7.6
 # vosk>=0.3.45  # optional: lightweight STT backend
-# silero-vad>=5.1  # optional: voice activity detection (pulls in torch)
+# useful-moonshine-onnx>=20251121  # optional: fast English ASR backend (onnxruntime, no torch)

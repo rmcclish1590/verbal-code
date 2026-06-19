@@ -4,7 +4,6 @@ import os
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Generator
 from typing import Any
 
 import numpy as np
@@ -12,8 +11,10 @@ import numpy as np
 logger = logging.getLogger("verbal_code")
 
 _DEFAULT_SAMPLE_RATE = 16000
-_STREAM_INTERVAL_SECONDS = 1.5
 _VOSK_PCM_CHUNK_SIZE = 4000
+# Moonshine accepts 0.1s–64s per call; split long recordings into 30s windows.
+_MOONSHINE_CHUNK_SECONDS = 30
+_MOONSHINE_MIN_SECONDS = 0.1
 _PCM_MAX_AMPLITUDE = 32767
 _PCM_MIN_AMPLITUDE = -32768
 
@@ -32,31 +33,30 @@ class TranscriberBase(ABC):
         ...
 
     @abstractmethod
-    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
-        """Process an incremental audio chunk and yield any new text delta."""
-        ...
-
-    @abstractmethod
     def reset(self) -> None:
-        """Reset any internal streaming state between dictation sessions."""
+        """Reset any internal state between dictation sessions."""
         ...
 
 
 class WhisperTranscriber(TranscriberBase):
-    """faster-whisper backed transcriber with batch and streaming support.
+    """faster-whisper backed transcriber for push-to-talk dictation.
 
-    Streaming accumulates audio into a rolling buffer and runs inference every
-    ``_STREAM_INTERVAL_SECONDS`` seconds.  Only the text delta since the last
-    emission is yielded so callers do not see duplicate prefixes.
+    Each dictation is transcribed in a single pass on release via
+    :class:`~faster_whisper.BatchedInferencePipeline`, which segments the audio
+    with Silero VAD and decodes the segments in parallel batches.  This is
+    several times faster than a plain sequential ``transcribe`` on multi-segment
+    audio and removes the need for a separate live-streaming pass.
     """
 
     def __init__(
         self,
-        model_size: str = "base",
+        model_size: str = "distil-small.en",
         device: str = "auto",
         compute_type: str = "int8",
         language: str = "en",
         beam_size: int = 5,
+        batch_size: int = 8,
+        initial_prompt: str = "",
         sample_rate: int = _DEFAULT_SAMPLE_RATE,
     ):
         self.model_size = model_size
@@ -64,17 +64,17 @@ class WhisperTranscriber(TranscriberBase):
         self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
+        self.batch_size = batch_size
+        # faster-whisper expects None (not "") when there is no prompt.
+        self.initial_prompt = initial_prompt or None
         self.sample_rate = sample_rate
         self._model: Any = None
+        self._batched: Any = None
         self._lock = threading.Lock()
-        self._stream_buffer: list[np.ndarray] = []
-        self._stream_samples: int = 0
-        self._last_stream_text: str = ""
-        self._stream_interval_samples = int(_STREAM_INTERVAL_SECONDS * sample_rate)
 
     def load_model(self) -> None:
-        """Download (if needed) and load the Whisper model into memory."""
-        from faster_whisper import WhisperModel
+        """Download (if needed) and load the Whisper model, then warm it up."""
+        from faster_whisper import BatchedInferencePipeline, WhisperModel
 
         logger.info(
             "Loading Whisper model '%s' (device=%s, compute_type=%s)...",
@@ -88,7 +88,27 @@ class WhisperTranscriber(TranscriberBase):
             device=self.device,
             compute_type=self.compute_type,
         )
+        self._batched = BatchedInferencePipeline(model=self._model)
         logger.info("Whisper model loaded in %.2fs", time.monotonic() - t0)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run one throwaway inference so the first dictation isn't penalised by lazy init."""
+        try:
+            silence = np.zeros(self.sample_rate, dtype=np.float32)
+            with self._lock:
+                segments, _ = self._batched.transcribe(
+                    silence,
+                    language=self.language,
+                    beam_size=1,
+                    batch_size=self.batch_size,
+                    vad_filter=True,
+                )
+                for _ in segments:  # segments are lazy; drain to force the work
+                    pass
+            logger.info("Whisper warmup complete")
+        except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            logger.debug("Warmup skipped: %s", exc)
 
     def transcribe_batch(self, audio: np.ndarray) -> str:
         """Run full-utterance transcription and return the joined text."""
@@ -100,10 +120,15 @@ class WhisperTranscriber(TranscriberBase):
 
         t0 = time.monotonic()
         with self._lock:
-            segments, info = self._model.transcribe(
+            segments, info = self._batched.transcribe(
                 audio,
                 language=self.language,
                 beam_size=self.beam_size,
+                batch_size=self.batch_size,
+                # Short dictations have no coherent prior context; conditioning on
+                # it is the main cause of Whisper repetition/hallucination loops.
+                condition_on_previous_text=False,
+                initial_prompt=self.initial_prompt,
                 vad_filter=True,
             )
             text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -116,49 +141,9 @@ class WhisperTranscriber(TranscriberBase):
         )
         return text
 
-    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
-        """Accumulate ``chunk`` and yield a text delta when the buffer is large enough."""
-        if self._model is None:
-            self.load_model()
-
-        self._stream_buffer.append(chunk)
-        self._stream_samples += len(chunk)
-
-        if self._stream_samples < self._stream_interval_samples:
-            return
-
-        audio = np.concatenate(self._stream_buffer)
-        stream_beam = max(1, self.beam_size // 2)
-
-        with self._lock:
-            segments, _ = self._model.transcribe(
-                audio,
-                language=self.language,
-                beam_size=stream_beam,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 300},
-            )
-            full_text = " ".join(
-                seg.text.strip() for seg in segments if seg.text.strip()
-            )
-
-        if full_text and full_text != self._last_stream_text:
-            delta = self._extract_delta(full_text)
-            self._last_stream_text = full_text
-            if delta:
-                yield delta
-
-    def _extract_delta(self, full_text: str) -> str:
-        """Return the portion of ``full_text`` that follows the last emitted text."""
-        if full_text.startswith(self._last_stream_text):
-            return full_text[len(self._last_stream_text) :].strip()
-        return full_text
-
     def reset(self) -> None:
-        """Clear the streaming buffer for the next dictation session."""
-        self._stream_buffer = []
-        self._stream_samples = 0
-        self._last_stream_text = ""
+        """No persistent per-session state; retained for interface compatibility."""
+        return
 
 
 class VoskTranscriber(TranscriberBase):
@@ -233,29 +218,94 @@ class VoskTranscriber(TranscriberBase):
         logger.info("Vosk transcription done in %.2fs", time.monotonic() - t0)
         return text
 
-    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
-        """Pass ``chunk`` through the Vosk recognizer and yield complete utterances."""
-        if self._model is None:
-            self.load_model()
-
-        pcm = self._to_pcm(chunk)
-        with self._lock:
-            if self._recognizer.AcceptWaveform(pcm):
-                result = json.loads(self._recognizer.Result())
-                text: str = result.get("text", "")
-                if text:
-                    yield text
-
     def reset(self) -> None:
         """Reset the Vosk recognizer state for a new dictation session."""
         if self._model is not None:
             self._new_recognizer()
 
 
+class MoonshineTranscriber(TranscriberBase):
+    """Moonshine (ONNX) backend — fast English-only ASR tuned for short audio.
+
+    Runs on onnxruntime with no torch/CUDA dependency and is markedly faster
+    than Whisper on short utterances, making it a strong fit for push-to-talk
+    dictation on modest CPUs.  Moonshine accepts segments up to ~64s, so longer
+    recordings are split into ``_MOONSHINE_CHUNK_SECONDS`` windows and rejoined.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "moonshine/base",
+        sample_rate: int = _DEFAULT_SAMPLE_RATE,
+    ):
+        self.model_name = model_name
+        self.sample_rate = sample_rate
+        self._model: Any = None
+        self._tokenizer: Any = None
+        self._lock = threading.Lock()
+
+    def load_model(self) -> None:
+        """Load the Moonshine ONNX model and tokenizer, then warm them up."""
+        from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+
+        logger.info("Loading Moonshine model '%s'...", self.model_name)
+        t0 = time.monotonic()
+        self._model = MoonshineOnnxModel(model_name=self.model_name)
+        self._tokenizer = load_tokenizer()
+        logger.info("Moonshine model loaded in %.2fs", time.monotonic() - t0)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run one throwaway inference so the first dictation isn't penalised by lazy init."""
+        try:
+            silence = np.zeros(self.sample_rate, dtype=np.float32)
+            with self._lock:
+                self._generate(silence)
+            logger.info("Moonshine warmup complete")
+        except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            logger.debug("Warmup skipped: %s", exc)
+
+    def _generate(self, segment: np.ndarray) -> str:
+        """Transcribe a single in-range segment (caller holds the lock)."""
+        tokens = self._model.generate(segment[None, ...])
+        decoded: list[str] = self._tokenizer.decode_batch(tokens)
+        return decoded[0].strip() if decoded else ""
+
+    def transcribe_batch(self, audio: np.ndarray) -> str:
+        """Transcribe ``audio``, segmenting recordings longer than the model limit."""
+        if self._model is None:
+            self.load_model()
+
+        audio = np.asarray(audio, dtype=np.float32)
+        duration = len(audio) / self.sample_rate
+        logger.info("Transcribing %.2fs of audio (Moonshine)...", duration)
+        if duration < _MOONSHINE_MIN_SECONDS:
+            return ""
+
+        t0 = time.monotonic()
+        chunk_samples = _MOONSHINE_CHUNK_SECONDS * self.sample_rate
+        parts: list[str] = []
+        with self._lock:
+            for start in range(0, len(audio), chunk_samples):
+                segment = audio[start : start + chunk_samples]
+                if len(segment) / self.sample_rate < _MOONSHINE_MIN_SECONDS:
+                    continue
+                text = self._generate(segment)
+                if text:
+                    parts.append(text)
+
+        logger.info("Moonshine transcription done in %.2fs", time.monotonic() - t0)
+        return " ".join(parts)
+
+    def reset(self) -> None:
+        """No persistent per-session state; retained for interface compatibility."""
+        return
+
+
 def create_transcriber(config: dict) -> TranscriberBase:
     """Instantiate and return the transcriber specified by ``config['stt']['engine']``.
 
-    Supported engines: ``"whisper"`` (default) and ``"vosk"``.
+    Supported engines: ``"whisper"`` (default), ``"moonshine"``, and ``"vosk"``.
     """
     stt_cfg = config.get("stt", {})
     engine: str = stt_cfg.get("engine", "whisper")
@@ -267,12 +317,21 @@ def create_transcriber(config: dict) -> TranscriberBase:
             sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
         )
 
+    if engine == "moonshine":
+        moonshine_cfg = stt_cfg.get("moonshine", {})
+        return MoonshineTranscriber(
+            model_name=moonshine_cfg.get("model", "moonshine/base"),
+            sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
+        )
+
     whisper_cfg = stt_cfg.get("whisper", {})
     return WhisperTranscriber(
-        model_size=whisper_cfg.get("model", "base"),
+        model_size=whisper_cfg.get("model", "distil-small.en"),
         device=whisper_cfg.get("device", "auto"),
         compute_type=whisper_cfg.get("compute_type", "int8"),
         language=whisper_cfg.get("language", "en"),
         beam_size=whisper_cfg.get("beam_size", 5),
+        batch_size=whisper_cfg.get("batch_size", 8),
+        initial_prompt=whisper_cfg.get("initial_prompt", ""),
         sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
     )

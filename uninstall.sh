@@ -116,7 +116,7 @@ else
     SKIPPED+=("cache (not found)")
 fi
 
-# ── Silero VAD model cache ──
+# ── Silero VAD model cache (legacy: older versions used torch/silero-vad) ──
 SILERO_CACHE="$HOME/.cache/torch/hub/snakers4_silero-vad_master"
 if [ -d "$SILERO_CACHE" ]; then
     rm -rf "$SILERO_CACHE"
@@ -126,8 +126,11 @@ else
     SKIPPED+=("silero-vad cache (not found)")
 fi
 
-# ── Whisper models (separate prompt) ──
-HF_MODELS=("$HOME"/.cache/huggingface/hub/models--Systran--faster-whisper-*)
+# ── Whisper / Moonshine models (separate prompt) ──
+HF_MODELS=(
+    "$HOME"/.cache/huggingface/hub/models--Systran--faster-whisper-*
+    "$HOME"/.cache/huggingface/hub/models--UsefulSensors--moonshine*
+)
 HF_FOUND=false
 for m in "${HF_MODELS[@]}"; do
     if [ -d "$m" ]; then
@@ -141,9 +144,9 @@ if [ "$HF_FOUND" = true ]; then
         REMOVE_HF="y"
     else
         echo ""
-        warn "Downloaded Whisper models found in ~/.cache/huggingface/"
+        warn "Downloaded Whisper/Moonshine models found in ~/.cache/huggingface/"
         warn "These are large and may be shared with other apps."
-        read -rp "Remove Whisper model cache? [y/N] " REMOVE_HF
+        read -rp "Remove model cache? [y/N] " REMOVE_HF
     fi
     if [[ "${REMOVE_HF,,}" == "y" ]]; then
         for m in "${HF_MODELS[@]}"; do
@@ -152,12 +155,12 @@ if [ "$HF_FOUND" = true ]; then
                 ok "Removed $(basename "$m")"
             fi
         done
-        REMOVED+=("whisper models")
+        REMOVED+=("whisper/moonshine models")
     else
-        SKIPPED+=("whisper models (kept)")
+        SKIPPED+=("whisper/moonshine models (kept)")
     fi
 else
-    SKIPPED+=("whisper models (not found)")
+    SKIPPED+=("whisper/moonshine models (not found)")
 fi
 
 # ── Summary ──
