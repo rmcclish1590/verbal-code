@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import tempfile
@@ -136,6 +137,63 @@ class TestNumericConfigValidation:
             with pytest.raises(SystemExit):
                 validate_config(self._config(stt__whisper__beam_size=100))
         assert "stt.whisper.beam_size" in caplog.text
+
+
+class TestSetupLogging:
+    """logging.file is sanitized before reaching FileHandler (MCC-9)."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_root_logger(self):
+        root = logging.getLogger()
+        saved = (root.handlers[:], root.level)
+        yield
+        for handler in root.handlers[:]:
+            if handler not in saved[0]:
+                handler.close()
+        root.handlers, root.level = saved
+
+    @staticmethod
+    def _file_handlers():
+        root = logging.getLogger()
+        return [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+
+    def test_valid_path_adds_file_handler(self, tmp_path):
+        log_file = tmp_path / "app.log"
+        app.setup_logging({"logging": {"file": str(log_file)}})
+        handlers = self._file_handlers()
+        assert len(handlers) == 1
+        assert handlers[0].baseFilename == str(log_file)
+
+    def test_tilde_is_expanded(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        app.setup_logging({"logging": {"file": "~/app.log"}})
+        handlers = self._file_handlers()
+        assert len(handlers) == 1
+        assert handlers[0].baseFilename == str(tmp_path / "app.log")
+
+    def test_missing_parent_directory_degrades_to_console(self, tmp_path, capsys):
+        log_file = tmp_path / "nonexistent" / "app.log"
+        app.setup_logging({"logging": {"file": str(log_file)}})
+        assert self._file_handlers() == []
+        assert "does not exist" in capsys.readouterr().err
+
+    def test_symlink_is_refused(self, tmp_path, capsys):
+        target = tmp_path / "target.log"
+        target.write_text("")
+        link = tmp_path / "link.log"
+        link.symlink_to(target)
+        app.setup_logging({"logging": {"file": str(link)}})
+        assert self._file_handlers() == []
+        assert "symlink" in capsys.readouterr().err
+
+    def test_directory_is_refused(self, tmp_path, capsys):
+        app.setup_logging({"logging": {"file": str(tmp_path)}})
+        assert self._file_handlers() == []
+        assert "directory" in capsys.readouterr().err
+
+    def test_no_file_configured_is_console_only(self):
+        app.setup_logging({})
+        assert self._file_handlers() == []
 
 
 class TestMainValidatesBeforeTestModes:
