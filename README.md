@@ -132,13 +132,17 @@ an application drops characters.
 
 ```yaml
 vad:
-  enabled: true        # requires torch (optional, ~2GB)
-  threshold: 0.5
-  min_speech_ms: 250
-  silence_ms: 500
+  trim_silence: true       # trim leading/trailing silence before transcription
+  trim_threshold_db: -40.0 # frames quieter than this (dBFS) count as silence
 ```
 
-VAD uses Silero to filter silence from the audio stream, reducing unnecessary transcription work. If `torch` is not installed, VAD is skipped gracefully.
+Before batch transcription, leading and trailing silence is trimmed with a
+lightweight energy-based detector (no extra dependencies). Whisper additionally
+segments speech internally with faster-whisper's built-in Silero VAD; the trim
+mainly helps Vosk and Moonshine, which otherwise receive the raw capture. A
+recording with no audible speech at all skips transcription entirely. Raise the
+threshold towards `-30` in noisy environments, or lower it towards `-50` if
+quiet speech gets clipped.
 
 ### System Tray
 

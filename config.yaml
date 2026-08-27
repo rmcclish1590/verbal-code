@@ -32,6 +32,15 @@ audio:
   chunk_size: 1024
   device: null
 
+vad:
+  # Trim leading/trailing silence from the recording before batch
+  # transcription (energy-based, no extra dependencies). Whisper's built-in
+  # VAD filter would cope without it; Vosk and Moonshine benefit directly.
+  trim_silence: true
+  # Frames with RMS energy below this (dBFS) count as silence. Raise towards
+  # -30 in noisy rooms, lower towards -50 if quiet speech gets clipped.
+  trim_threshold_db: -40.0
+
 injection:
   method: "auto"
   # Delay between simulated keystrokes (xdotool --delay), in ms PER CHARACTER.
