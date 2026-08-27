@@ -271,10 +271,10 @@ class VerbalCode:
         self._trim_silence_enabled: bool = vad_cfg.get("trim_silence", True)
         self._trim_threshold_db: float = vad_cfg.get("trim_threshold_db", -40.0)
 
-        # Streaming transcription only matters when its partial results are
-        # consumed (live injection). Off by default: batch transcription on
-        # hotkey release covers normal dictation without the per-interval
-        # inference cost while recording.
+        # With the vosk engine, streaming injects each utterance live as it
+        # finalises. Off by default: batch transcription on hotkey release
+        # covers normal dictation without the per-interval inference cost
+        # while recording.
         self._streaming_enabled: bool = stt_cfg.get("streaming_enabled", False)
 
         self.capture = AudioCapture(
@@ -302,6 +302,22 @@ class VerbalCode:
         self._recording = False
         self._record_start: float = 0.0
 
+        self._stream_stop = threading.Event()
+        self._stream_thread: threading.Thread | None = None
+        # Live injection needs stream text the engine will never revise;
+        # engines with revisable partials (Whisper) keep streaming log-only
+        # and rely on batch transcription at release.
+        self._live_injection: bool = (
+            self._streaming_enabled and self.transcriber.supports_live_streaming
+        )
+        if self._streaming_enabled and not self._live_injection:
+            logger.info(
+                "stt.streaming_enabled is on, but the configured engine only "
+                "produces revisable partial results; text is still injected "
+                "in one batch on hotkey release (use the vosk engine for "
+                "live injection)."
+            )
+
     def start(self) -> None:
         """Load the model, start subsystems, and print the ready banner."""
         logger.info("Loading transcription model...")
@@ -318,10 +334,7 @@ class VerbalCode:
     def stop(self) -> None:
         """Gracefully shut down all subsystems."""
         self.hotkey.stop()
-        self._stream_stop.set()
-        if self._stream_thread is not None:
-            self._stream_thread.join(timeout=2.0)
-            self._stream_thread = None
+        self._join_stream_thread()
         if self._recording:
             self.capture.stop()
         if self._tray_enabled:
@@ -375,6 +388,7 @@ class VerbalCode:
             self.transcriber.reset()
             self.capture.start()
             if self._streaming_enabled:
+                self._stream_stop.clear()
                 self._stream_thread = threading.Thread(
                     target=self._streaming_loop, daemon=True
                 )
@@ -388,17 +402,35 @@ class VerbalCode:
             if chunk is None:
                 continue
             self._emit_stream_text(chunk)
+        # Chunks captured before the stop request may still be queued; feed
+        # them through so the end of the dictation isn't lost.
+        for chunk in self.capture.get_all_chunks():
+            self._emit_stream_text(chunk)
 
     def _emit_stream_text(self, chunk: object) -> None:
         for text in self.transcriber.transcribe_stream(chunk):  # type: ignore[arg-type]
-            if text:
-                logger.debug("[stream] %s", text)
-                # Uncomment to enable live injection of partial results:
-                # self.injector.inject(self.text_processor.process(text))
+            if not text:
+                continue
+            logger.debug("[stream] %s", text)
+            if self._live_injection:
+                self._inject_stream_text(text)
+
+    def _inject_stream_text(self, text: str) -> None:
+        """Inject one finalised stream utterance into the focused window."""
+        try:
+            self.injector.inject(self.text_processor.process(text))
+        except Exception as exc:
+            logger.error("Live injection failed: %s", exc)
 
     def _on_dictation_stop(self) -> None:
         audio, duration = self._stop_recording()
         if audio is None:
+            return
+
+        self._join_stream_thread()
+
+        if self._live_injection:
+            self._finish_live_dictation()
             return
 
         if duration < self.MIN_AUDIO_SECONDS:
@@ -415,6 +447,29 @@ class VerbalCode:
             return
 
         self._inject_text(text)
+
+    def _join_stream_thread(self) -> None:
+        """Stop the per-session streaming thread and wait for it to drain."""
+        if self._stream_thread is None:
+            return
+        self._stream_stop.set()
+        self._stream_thread.join(timeout=5.0)
+        if self._stream_thread.is_alive():
+            logger.warning("Streaming thread did not stop within timeout")
+        self._stream_thread = None
+
+    def _finish_live_dictation(self) -> None:
+        """Flush and inject the stream tail; everything else already landed live."""
+        try:
+            tail = self.transcriber.stream_finalize()
+        except Exception as exc:
+            logger.error("Stream finalize failed: %s", exc)
+            self.tray.set_state(self._TrayState.ERROR)
+            return
+        if tail.strip():
+            self._inject_text(self.text_processor.process(tail))
+        else:
+            self.tray.set_state(self._TrayState.IDLE)
 
     def _stop_recording(self) -> tuple[object, float]:
         """Stop the audio stream and return (audio, duration).

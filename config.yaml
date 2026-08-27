@@ -4,8 +4,11 @@ hotkey:
 
 stt:
   engine: "whisper"
-  # Run incremental transcription while recording. Only useful once live
-  # injection of partial results is implemented; costs continuous inference.
+  # Live injection while you speak. With the vosk engine, each utterance is
+  # typed into the focused window as it finalises (a pause ends an utterance);
+  # nothing further happens on release. Whisper/Moonshine partials are
+  # revisable, so those engines keep injecting in one batch on release.
+  # Costs continuous inference while recording.
   streaming_enabled: false
   whisper:
     # English-only distil model: near-small accuracy at a lower CPU cost.

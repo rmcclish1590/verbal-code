@@ -1,6 +1,6 @@
 import numpy as np
 
-from verbal_code.transcriber import WhisperTranscriber
+from verbal_code.transcriber import TranscriberBase, VoskTranscriber, WhisperTranscriber
 
 
 class _FakeSegment:
@@ -54,3 +54,78 @@ class TestStreamGating:
         t.reset()
         list(t.transcribe_stream(_HALF_SECOND))
         assert t._model.calls == 1
+
+
+class _FakeKaldiRecognizer:
+    """Finalises an utterance every ``finalize_every`` chunks."""
+
+    def __init__(self, finalize_every: int = 2):
+        self.finalize_every = finalize_every
+        self.chunks = 0
+        self.utterances = 0
+        self.final_flushed = False
+
+    def AcceptWaveform(self, pcm: bytes) -> bool:
+        self.chunks += 1
+        return self.chunks % self.finalize_every == 0
+
+    def Result(self) -> str:
+        self.utterances += 1
+        return f'{{"text": "utterance {self.utterances}"}}'
+
+    def FinalResult(self) -> str:
+        self.final_flushed = True
+        return '{"text": "trailing words"}'
+
+    def SetWords(self, value: bool) -> None:
+        pass
+
+
+def _make_vosk() -> VoskTranscriber:
+    t = VoskTranscriber()
+    t._model = object()  # sentinel: skips load_model()
+    t._recognizer = _FakeKaldiRecognizer()
+    t._new_recognizer = lambda: None  # replaced recognizer needs no vosk import
+    return t
+
+
+class TestVoskStreaming:
+    def test_declares_live_streaming_support(self):
+        assert VoskTranscriber.supports_live_streaming is True
+        assert WhisperTranscriber.supports_live_streaming is False
+
+    def test_yields_only_finalised_utterances(self):
+        t = _make_vosk()
+        chunk = np.zeros(1024, dtype=np.float32)
+        texts = [text for _ in range(4) for text in t.transcribe_stream(chunk)]
+        assert texts == ["utterance 1", "utterance 2"]
+
+    def test_stream_finalize_flushes_open_utterance(self):
+        t = _make_vosk()
+        assert t.stream_finalize() == "trailing words"
+        assert t._recognizer.final_flushed
+
+    def test_stream_finalize_without_model_returns_empty(self):
+        t = VoskTranscriber()
+        assert t.stream_finalize() == ""
+
+
+class TestTranscriberBaseStreamingDefaults:
+    class _Minimal(TranscriberBase):
+        def load_model(self):
+            pass
+
+        def transcribe_batch(self, audio):
+            return ""
+
+        def reset(self):
+            pass
+
+    def test_default_stream_yields_nothing(self):
+        t = self._Minimal()
+        assert list(t.transcribe_stream(np.zeros(10, dtype=np.float32))) == []
+
+    def test_default_finalize_is_empty(self):
+        t = self._Minimal()
+        assert t.stream_finalize() == ""
+        assert TranscriberBase.supports_live_streaming is False
