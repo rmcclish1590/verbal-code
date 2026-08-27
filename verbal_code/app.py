@@ -83,7 +83,45 @@ def validate_config(config: dict) -> None:
 
     engine = config.get("stt", {}).get("engine", "whisper")
     _assert_stt_engine_available(engine)
+    _assert_numeric_values(config)
     _assert_sample_rate_supported(engine, config)
+
+
+# (section path, key, expected type, min, max) — bounds are inclusive. Values
+# outside these ranges either crash the subsystems or exhaust resources
+# (e.g. a huge chunk_size or beam_size).
+_NUMERIC_CONFIG_BOUNDS: list[tuple[tuple[str, ...], str, type | tuple, float, float]] = [
+    (("audio",), "sample_rate", int, 8000, 192000),
+    (("audio",), "channels", int, 1, 8),
+    (("audio",), "chunk_size", int, 64, 65536),
+    (("stt", "whisper"), "beam_size", int, 1, 20),
+    (("stt", "whisper"), "batch_size", int, 1, 64),
+    (("injection",), "delay_ms", int, 0, 1000),
+    (("vad",), "trim_threshold_db", (int, float), -120, 0),
+]
+
+
+def _assert_numeric_values(config: dict) -> None:
+    """Exit with a clear message when a numeric config value is unusable."""
+    for path, key, expected, low, high in _NUMERIC_CONFIG_BOUNDS:
+        section: object = config
+        for part in path:
+            section = section.get(part, {}) if isinstance(section, dict) else {}
+        if not isinstance(section, dict) or key not in section:
+            continue
+
+        value = section[key]
+        dotted = ".".join((*path, key))
+        kind = "an integer" if expected is int else "a number"
+        if isinstance(value, bool) or not isinstance(value, expected):
+            logger.error("%s must be %s, got %r", dotted, kind, value)
+            sys.exit(1)
+        if not low <= value <= high:
+            logger.error(
+                "%s is %s, outside the supported range %s to %s",
+                dotted, value, low, high,
+            )
+            sys.exit(1)
 
 
 def _assert_sample_rate_supported(engine: str, config: dict) -> None:
