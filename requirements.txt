@@ -3,5 +3,6 @@ numpy>=1.24
 sounddevice>=0.4.6
 faster-whisper>=1.0.0
 pynput>=1.7.6
+evdev>=1.6  # Wayland global hotkeys (reads /dev/input; user must be in the input group)
 # vosk>=0.3.45  # optional: lightweight STT backend
 # useful-moonshine-onnx>=20251121  # optional: fast English ASR backend (onnxruntime, no torch)

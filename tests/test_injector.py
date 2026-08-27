@@ -53,3 +53,27 @@ class TestCreateInjector:
         injector = create_injector({"injection": {"method": "xdotool", "delay_ms": 100}})
         assert isinstance(injector, XdotoolInjector)
         assert injector.typing_delay_ms == 100
+
+
+class TestWaylandAutoOrder:
+    @patch("verbal_code.injector.shutil.which")
+    def test_auto_prefers_ydotool_on_wayland(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        mock_which.return_value = "/usr/bin/anything"  # everything available
+        injector = create_injector({"injection": {"method": "auto"}})
+        assert isinstance(injector, YdotoolInjector)
+
+    @patch("verbal_code.injector.shutil.which")
+    def test_auto_prefers_xdotool_on_x11(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        mock_which.return_value = "/usr/bin/anything"
+        injector = create_injector({"injection": {"method": "auto"}})
+        assert isinstance(injector, XdotoolInjector)
+
+    @patch("verbal_code.injector.shutil.which")
+    def test_explicit_method_overrides_session(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        mock_which.return_value = "/usr/bin/anything"
+        injector = create_injector({"injection": {"method": "xdotool"}})
+        assert isinstance(injector, XdotoolInjector)

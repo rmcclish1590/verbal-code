@@ -12,6 +12,10 @@ below as MCC-NN).
 
 ### Added
 
+- Wayland support: on a Wayland session, global hotkeys are read via an evdev
+  listener (requires membership in the `input` group) and injection prefers
+  ydotool automatically (MCC-12).
+
 - Live streaming injection with the Vosk engine: each utterance is typed into
   the focused window as it finalises, and hotkey release just flushes the last
   utterance — no duplicate batch pass (MCC-11).

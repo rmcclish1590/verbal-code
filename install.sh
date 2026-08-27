@@ -89,7 +89,7 @@ read -rp "Enter choice [1]: " STT_CHOICE
 STT_CHOICE="${STT_CHOICE:-1}"
 
 info "Installing core dependencies..."
-"$PIP" install --quiet PyYAML numpy sounddevice pynput
+"$PIP" install --quiet PyYAML numpy sounddevice pynput evdev
 
 case "$STT_CHOICE" in
     1)

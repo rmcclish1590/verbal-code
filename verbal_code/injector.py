@@ -183,17 +183,29 @@ def _build_candidate_list(
     preferred: str,
     delay: int,
 ) -> list[InjectorBase]:
-    """Return an ordered list of injectors with the preferred method first."""
+    """Return an ordered list of injectors with the preferred method first.
+
+    With ``method: auto``, X11 prefers xdotool while Wayland prefers ydotool —
+    xdotool/xclip only reach XWayland windows there, so they are kept solely
+    as a last resort.
+    """
+    from verbal_code.hotkeys import is_wayland_session
+
     xdotool = XdotoolInjector(delay)
     clipboard = ClipboardInjector()
     ydotool = YdotoolInjector()
+
+    if is_wayland_session():
+        auto = [ydotool, xdotool, clipboard]
+    else:
+        auto = [xdotool, clipboard, ydotool]
 
     priority_map: dict[str, list[InjectorBase]] = {
         "xdotool": [xdotool, clipboard, ydotool],
         "clipboard": [clipboard, xdotool, ydotool],
         "ydotool": [ydotool, xdotool, clipboard],
     }
-    return priority_map.get(preferred, [xdotool, clipboard, ydotool])
+    return priority_map.get(preferred, auto)
 
 
 def create_injector(config: dict) -> InjectorBase:

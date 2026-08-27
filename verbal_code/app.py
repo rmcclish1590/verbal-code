@@ -248,7 +248,7 @@ class VerbalCode:
         # Deferred imports keep startup fast and avoid circular dependencies
         # at module load time — all subsystems import from each other indirectly.
         from verbal_code.audio import AudioCapture
-        from verbal_code.hotkeys import HotkeyListener
+        from verbal_code.hotkeys import create_hotkey_listener
         from verbal_code.injector import TextProcessor, create_injector
         from verbal_code.transcriber import create_transcriber
         from verbal_code.tray import SystemTray, TrayState
@@ -286,7 +286,7 @@ class VerbalCode:
         self.transcriber = create_transcriber(config)
         self.injector = create_injector(config)
         self.text_processor = TextProcessor()
-        self.hotkey = HotkeyListener(
+        self.hotkey = create_hotkey_listener(
             modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
             key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
             on_activate=self._on_dictation_start,
@@ -362,12 +362,12 @@ class VerbalCode:
         editor.show()
 
     def _on_hotkey_saved(self, modifiers: list[str], key: str) -> None:
-        from verbal_code.hotkeys import HotkeyListener
+        from verbal_code.hotkeys import create_hotkey_listener
 
         self.hotkey.stop()
         self.config.setdefault("hotkey", {})["modifiers"] = modifiers
         self.config["hotkey"]["key"] = key
-        self.hotkey = HotkeyListener(
+        self.hotkey = create_hotkey_listener(
             modifiers=modifiers,
             key=key,
             on_activate=self._on_dictation_start,
