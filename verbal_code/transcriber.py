@@ -71,6 +71,11 @@ class WhisperTranscriber(TranscriberBase):
         self._model: Any = None
         self._batched: Any = None
         self._lock = threading.Lock()
+        self._stream_buffer: list[np.ndarray] = []
+        self._stream_samples: int = 0
+        self._last_transcribed_samples: int = 0
+        self._last_stream_text: str = ""
+        self._stream_interval_samples = int(_STREAM_INTERVAL_SECONDS * sample_rate)
 
     def load_model(self) -> None:
         """Download (if needed) and load the Whisper model, then warm it up."""
@@ -141,9 +146,54 @@ class WhisperTranscriber(TranscriberBase):
         )
         return text
 
+    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
+        """Accumulate ``chunk`` and yield a text delta when the buffer is large enough."""
+        if self._model is None:
+            self.load_model()
+
+        self._stream_buffer.append(chunk)
+        self._stream_samples += len(chunk)
+
+        # Run inference at most once per interval of *new* audio; otherwise every
+        # chunk after the first interval would re-transcribe the whole session.
+        new_samples = self._stream_samples - self._last_transcribed_samples
+        if new_samples < self._stream_interval_samples:
+            return
+        self._last_transcribed_samples = self._stream_samples
+
+        audio = np.concatenate(self._stream_buffer)
+        stream_beam = max(1, self.beam_size // 2)
+
+        with self._lock:
+            segments, _ = self._model.transcribe(
+                audio,
+                language=self.language,
+                beam_size=stream_beam,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 300},
+            )
+            full_text = " ".join(
+                seg.text.strip() for seg in segments if seg.text.strip()
+            )
+
+        if full_text and full_text != self._last_stream_text:
+            delta = self._extract_delta(full_text)
+            self._last_stream_text = full_text
+            if delta:
+                yield delta
+
+    def _extract_delta(self, full_text: str) -> str:
+        """Return the portion of ``full_text`` that follows the last emitted text."""
+        if full_text.startswith(self._last_stream_text):
+            return full_text[len(self._last_stream_text) :].strip()
+        return full_text
+
     def reset(self) -> None:
-        """No persistent per-session state; retained for interface compatibility."""
-        return
+        """Clear the streaming buffer for the next dictation session."""
+        self._stream_buffer = []
+        self._stream_samples = 0
+        self._last_transcribed_samples = 0
+        self._last_stream_text = ""
 
 
 class VoskTranscriber(TranscriberBase):

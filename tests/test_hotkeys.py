@@ -19,6 +19,10 @@ class TestNormalizeKey:
     def test_modifier_key_returns_itself(self):
         assert _normalize_key(Key.ctrl_l) is Key.ctrl_l
 
+    def test_control_char_falls_back_to_vk(self):
+        # With Ctrl held, pynput reports 'd' as '\x04'; vk must win.
+        assert _normalize_key(KeyCode(char="\x04", vk=100)) == "d"
+
 
 class TestSpecialKeyMap:
     def test_space_maps_to_key_space(self):
