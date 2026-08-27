@@ -205,7 +205,9 @@ class TestDictationLatencyLogging:
         app = _make_app(_speech(), _FakeTranscriber(text="hello"))
         with caplog.at_level("INFO", logger="verbal_code"):
             app._on_dictation_stop()
-        lines = [r.message for r in caplog.records if "dictation_latency_ms=" in r.message]
+        lines = [
+            r.message for r in caplog.records if "dictation_latency_ms=" in r.message
+        ]
         assert len(lines) == 1
         latency = int(lines[0].split("=")[1])
         assert 0 <= latency < 60_000

@@ -119,7 +119,8 @@ class WhisperTranscriber(TranscriberBase):
         self._warmup()
 
     def _warmup(self) -> None:
-        """Run one throwaway inference so the first dictation isn't penalised by lazy init."""
+        """Run one throwaway inference so the first dictation isn't penalised by
+        lazy init."""
         try:
             silence = np.zeros(self.sample_rate, dtype=np.float32)
             with self._lock:
@@ -168,7 +169,8 @@ class WhisperTranscriber(TranscriberBase):
         return text
 
     def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
-        """Accumulate ``chunk`` and yield a text delta when the buffer is large enough."""
+        """Accumulate ``chunk`` and yield a text delta when the buffer is large
+        enough."""
         if self._model is None:
             self.load_model()
 
@@ -359,7 +361,8 @@ class MoonshineTranscriber(TranscriberBase):
         self._warmup()
 
     def _warmup(self) -> None:
-        """Run one throwaway inference so the first dictation isn't penalised by lazy init."""
+        """Run one throwaway inference so the first dictation isn't penalised by
+        lazy init."""
         try:
             silence = np.zeros(self.sample_rate, dtype=np.float32)
             with self._lock:
@@ -467,14 +470,18 @@ def create_transcriber(config: dict) -> TranscriberBase:
         vosk_cfg = stt_cfg.get("vosk", {})
         return VoskTranscriber(
             model_name=vosk_cfg.get("model_name", "vosk-model-small-en-us-0.15"),
-            sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
+            sample_rate=config.get("audio", {}).get(
+                "sample_rate", _DEFAULT_SAMPLE_RATE
+            ),
         )
 
     if engine == "moonshine":
         moonshine_cfg = stt_cfg.get("moonshine", {})
         return MoonshineTranscriber(
             model_name=moonshine_cfg.get("model", "moonshine/base"),
-            sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
+            sample_rate=config.get("audio", {}).get(
+                "sample_rate", _DEFAULT_SAMPLE_RATE
+            ),
         )
 
     whisper_cfg = stt_cfg.get("whisper", {})

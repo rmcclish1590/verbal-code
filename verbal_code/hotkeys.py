@@ -31,9 +31,9 @@ def create_hotkey_listener(
     """
     if is_wayland_session():
         try:
-            from verbal_code.hotkeys_evdev import EvdevHotkeyListener
-
             import evdev  # noqa: F401 — fail here, not in the reader thread
+
+            from verbal_code.hotkeys_evdev import EvdevHotkeyListener
         except ImportError:
             logger.error(
                 "Wayland session detected but the 'evdev' package is not "

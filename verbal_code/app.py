@@ -17,7 +17,15 @@ logger = logging.getLogger("verbal_code")
 # hotkey release so modifiers are not misinterpreted as part of the typed text.
 _PRE_INJECT_DELAY_SECONDS = 0.05
 
-_KNOWN_CONFIG_SECTIONS = {"hotkey", "stt", "audio", "injection", "vad", "tray", "logging"}
+_KNOWN_CONFIG_SECTIONS = {
+    "hotkey",
+    "stt",
+    "audio",
+    "injection",
+    "vad",
+    "tray",
+    "logging",
+}
 
 # Single source of truth for the default hotkey, matching config.yaml and README.
 DEFAULT_HOTKEY_MODIFIERS = ["super", "alt"]
@@ -132,7 +140,8 @@ def validate_config(config: dict) -> None:
 # (section path, key, expected type, min, max) — bounds are inclusive. Values
 # outside these ranges either crash the subsystems or exhaust resources
 # (e.g. a huge chunk_size or beam_size).
-_NUMERIC_CONFIG_BOUNDS: list[tuple[tuple[str, ...], str, type | tuple, float, float]] = [
+_BoundSpec = tuple[tuple[str, ...], str, "type | tuple", float, float]
+_NUMERIC_CONFIG_BOUNDS: list[_BoundSpec] = [
     (("audio",), "sample_rate", int, 8000, 192000),
     (("audio",), "channels", int, 1, 8),
     (("audio",), "chunk_size", int, 64, 65536),
@@ -682,7 +691,9 @@ class VerbalCode:
         except Exception as exc:
             logger.error("Transcription failed: %s", exc)
             self.tray.set_state(self._TrayState.ERROR)
-            self.tray.notify("Verbal Code", "Transcription failed \u2014 check logs for details")
+            self.tray.notify(
+                "Verbal Code", "Transcription failed \u2014 check logs for details"
+            )
             return None
 
         if not raw.strip():
@@ -708,7 +719,9 @@ class VerbalCode:
         except Exception as exc:
             logger.error("Injection failed: %s", exc)
             self.tray.set_state(self._TrayState.ERROR)
-            self.tray.notify("Verbal Code", "Injection failed \u2014 check logs for details")
+            self.tray.notify(
+                "Verbal Code", "Injection failed \u2014 check logs for details"
+            )
             return False
 
 
