@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from verbal_code.injector import (
     ClipboardInjector,
+    HybridInjector,
     XdotoolInjector,
     YdotoolInjector,
     _build_candidate_list,
@@ -69,11 +70,72 @@ class TestWaylandAutoOrder:
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
         mock_which.return_value = "/usr/bin/anything"
         injector = create_injector({"injection": {"method": "auto"}})
-        assert isinstance(injector, XdotoolInjector)
+        # auto on X11 wraps xdotool typing with clipboard paste for long text
+        assert isinstance(injector, HybridInjector)
+        assert isinstance(injector._typing, XdotoolInjector)
 
     @patch("verbal_code.injector.shutil.which")
     def test_explicit_method_overrides_session(self, mock_which, monkeypatch):
         monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        mock_which.return_value = "/usr/bin/anything"
+        injector = create_injector({"injection": {"method": "xdotool"}})
+        assert isinstance(injector, XdotoolInjector)
+
+
+class _SpyInjector:
+    def __init__(self, available=True):
+        self.available = available
+        self.injected: list[str] = []
+
+    def inject(self, text):
+        self.injected.append(text)
+
+    def is_available(self):
+        return self.available
+
+
+class TestHybridInjector:
+    def test_short_text_is_typed(self):
+        typing, clipboard = _SpyInjector(), _SpyInjector()
+        HybridInjector(typing, clipboard, threshold=100).inject("short")
+        assert typing.injected == ["short"]
+        assert clipboard.injected == []
+
+    def test_long_text_is_pasted(self):
+        typing, clipboard = _SpyInjector(), _SpyInjector()
+        long_text = "x" * 100
+        HybridInjector(typing, clipboard, threshold=100).inject(long_text)
+        assert clipboard.injected == [long_text]
+        assert typing.injected == []
+
+    def test_falls_back_to_typing_when_clipboard_unavailable(self):
+        typing, clipboard = _SpyInjector(), _SpyInjector(available=False)
+        long_text = "x" * 500
+        HybridInjector(typing, clipboard, threshold=100).inject(long_text)
+        assert typing.injected == [long_text]
+
+    @patch("verbal_code.injector.shutil.which")
+    def test_auto_on_x11_returns_hybrid(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        mock_which.return_value = "/usr/bin/anything"
+        injector = create_injector({"injection": {"method": "auto"}})
+        assert isinstance(injector, HybridInjector)
+        assert injector.threshold == 100
+
+    @patch("verbal_code.injector.shutil.which")
+    def test_zero_threshold_disables_hybrid(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        mock_which.return_value = "/usr/bin/anything"
+        injector = create_injector(
+            {"injection": {"method": "auto", "clipboard_threshold": 0}}
+        )
+        assert isinstance(injector, XdotoolInjector)
+
+    @patch("verbal_code.injector.shutil.which")
+    def test_explicit_method_never_wrapped(self, mock_which, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
         mock_which.return_value = "/usr/bin/anything"
         injector = create_injector({"injection": {"method": "xdotool"}})
         assert isinstance(injector, XdotoolInjector)

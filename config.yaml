@@ -52,6 +52,10 @@ injection:
   # Delay between simulated keystrokes (xdotool --delay), in ms PER CHARACTER.
   # 0 = as fast as possible; raise only if an app drops characters.
   delay_ms: 0
+  # With method "auto": dictations this many characters or longer are pasted
+  # via the clipboard instead of typed (instant, regardless of length).
+  # 0 disables the switch and always types.
+  clipboard_threshold: 100
 
 tray:
   enabled: true

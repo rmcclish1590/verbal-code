@@ -12,6 +12,10 @@ below as MCC-NN).
 
 ### Added
 
+- Automatic clipboard paste for long dictations (`injection.clipboard_threshold`,
+  default 100 characters): short fragments are still typed, long ones land
+  instantly via the clipboard (MCC-14).
+
 - Toggle-to-dictate mode (`hotkey.mode: "toggle"`): press the hotkey once to
   start recording and again to stop, alongside the default push-to-talk
   (MCC-13).

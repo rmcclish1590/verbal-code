@@ -152,6 +152,42 @@ class YdotoolInjector(InjectorBase):
         return shutil.which("ydotool") is not None
 
 
+class HybridInjector(InjectorBase):
+    """Types short fragments, pastes long ones via the clipboard.
+
+    Keystroke simulation feels natural for short dictations but scales
+    linearly with text length (and multiplies with ``delay_ms``); a clipboard
+    paste lands a long dictation instantly.  ``threshold`` is the character
+    count at which pasting takes over.
+    """
+
+    def __init__(
+        self,
+        typing_injector: InjectorBase,
+        clipboard_injector: InjectorBase,
+        threshold: int,
+    ):
+        self._typing = typing_injector
+        self._clipboard = clipboard_injector
+        self.threshold = threshold
+
+    def inject(self, text: str) -> None:
+        """Route ``text`` to typing or clipboard paste based on its length."""
+        if len(text) >= self.threshold and self._clipboard.is_available():
+            logger.debug(
+                "Text is %d chars (>= %d): using clipboard paste",
+                len(text),
+                self.threshold,
+            )
+            self._clipboard.inject(text)
+        else:
+            self._typing.inject(text)
+
+    def is_available(self) -> bool:
+        """Available when either underlying strategy is."""
+        return self._typing.is_available() or self._clipboard.is_available()
+
+
 class TextProcessor:
     """Applies lightweight post-processing to raw transcription output.
 
@@ -208,20 +244,47 @@ def _build_candidate_list(
     return priority_map.get(preferred, auto)
 
 
+DEFAULT_CLIPBOARD_THRESHOLD = 100
+
+
 def create_injector(config: dict) -> InjectorBase:
     """Resolve and return the best available injector for the current system.
 
-    Reads ``injection.method`` and ``injection.delay_ms`` from ``config``.
-    Falls back through the full candidate list if the preferred tool is absent.
+    Reads ``injection.method``, ``injection.delay_ms``, and
+    ``injection.clipboard_threshold`` from ``config``.  Falls back through the
+    full candidate list if the preferred tool is absent.  With ``method:
+    auto`` on X11, typing injection is wrapped so dictations of
+    ``clipboard_threshold`` characters or more are pasted via the clipboard
+    instead of typed (0 disables the switch).
     """
     inj_cfg = config.get("injection", {})
     preferred: str = inj_cfg.get("method", "auto")
     delay: int = inj_cfg.get("delay_ms", 0)
+    threshold: int = inj_cfg.get("clipboard_threshold", DEFAULT_CLIPBOARD_THRESHOLD)
 
+    resolved: InjectorBase | None = None
     for injector in _build_candidate_list(preferred, delay):
         if injector.is_available():
-            logger.info("Using injector: %s", type(injector).__name__)
-            return injector
+            resolved = injector
+            break
 
-    logger.warning("No injector available, falling back to xdotool (may fail)")
-    return XdotoolInjector(delay)
+    if resolved is None:
+        logger.warning("No injector available, falling back to xdotool (may fail)")
+        return XdotoolInjector(delay)
+
+    if (
+        preferred == "auto"
+        and threshold > 0
+        and isinstance(resolved, XdotoolInjector)
+    ):
+        clipboard = ClipboardInjector()
+        if clipboard.is_available():
+            logger.info(
+                "Using injector: XdotoolInjector with clipboard paste for "
+                "%d+ character texts",
+                threshold,
+            )
+            return HybridInjector(resolved, clipboard, threshold)
+
+    logger.info("Using injector: %s", type(resolved).__name__)
+    return resolved
