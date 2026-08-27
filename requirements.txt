@@ -1,8 +1,10 @@
-PyYAML>=6.0
-numpy>=1.24
-sounddevice>=0.4.6
-faster-whisper>=1.0.0
-pynput>=1.7.6
-evdev>=1.6  # Wayland global hotkeys (reads /dev/input; user must be in the input group)
-# vosk>=0.3.45  # optional: lightweight STT backend
+# Upper bounds cap at the next major version so an incompatible release can't
+# break an install; raise them deliberately after testing.
+PyYAML>=6.0,<7
+numpy>=1.24,<3
+sounddevice>=0.4.6,<0.6
+faster-whisper>=1.0.0,<2
+pynput>=1.7.6,<2
+evdev>=1.6,<2  # Wayland global hotkeys (reads /dev/input; user must be in the input group)
+# vosk>=0.3.45,<0.4  # optional: lightweight STT backend
 # useful-moonshine-onnx>=20251121  # optional: fast English ASR backend (onnxruntime, no torch)

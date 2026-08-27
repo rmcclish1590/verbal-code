@@ -51,6 +51,10 @@ below as MCC-NN).
 
 ### Changed
 
+- Dependencies carry upper bounds (next major version) in requirements.txt
+  and pyproject.toml so an incompatible release can't break an install
+  (MCC-24).
+
 - The tray prefers the maintained AyatanaAppIndicator3 library, falling back
   to the deprecated AppIndicator3 where Ayatana isn't available; install.sh
   installs whichever the distribution ships (MCC-23).

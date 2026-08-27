@@ -7,19 +7,19 @@ name = "verbal-code"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "PyYAML>=6.0",
-    "faster-whisper>=1.0.0",
-    "numpy>=1.24",
-    "evdev>=1.6",
-    "pynput>=1.7.6",
-    "sounddevice>=0.4.6",
+    "PyYAML>=6.0,<7",
+    "faster-whisper>=1.0.0,<2",
+    "numpy>=1.24,<3",
+    "evdev>=1.6,<2",
+    "pynput>=1.7.6,<2",
+    "sounddevice>=0.4.6,<0.6",
 ]
 
 [tool.setuptools.packages.find]
 include = ["verbal_code*"]
 
 [project.optional-dependencies]
-vosk = ["vosk>=0.3.45"]
+vosk = ["vosk>=0.3.45,<0.4"]
 moonshine = ["useful-moonshine-onnx>=20251121"]
 
 [project.scripts]
