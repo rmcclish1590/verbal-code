@@ -47,6 +47,10 @@ _STATE_LABELS: dict[TrayState, str] = {
 }
 
 
+def _model_label(engine: str, model: str) -> str:
+    return f"Engine: {engine} · {model}"
+
+
 def _write_icons() -> None:
     """Render per-state SVG icon files into the icon cache directory."""
     os.makedirs(_ICON_DIR, exist_ok=True)
@@ -70,12 +74,20 @@ class SystemTray:
         on_quit: Callable[[], None] | None = None,
         on_hotkeys: Callable[[], None] | None = None,
         notifications: bool = True,
+        on_model_selected: Callable[[str, str], None] | None = None,
+        model_menu: list[tuple[str, list[str]]] | None = None,
+        current_model: tuple[str, str] | None = None,
     ):
         self._on_quit = on_quit
         self._on_hotkeys = on_hotkeys
         self._notifications = notifications
+        self._on_model_selected = on_model_selected
+        self._model_menu = model_menu or []
+        self._current_model = current_model
         self._indicator: Any = None
         self._status_item: Any = None
+        self._model_item: Any = None
+        self._model_items: dict[tuple[str, str], Any] = {}
         self._available = False
         self._gtk: Any = None
         self._gdk: Any = None
@@ -115,7 +127,18 @@ class SystemTray:
         self._status_item.set_sensitive(False)
         menu.append(self._status_item)
 
+        if self._current_model:
+            self._model_item = self._gtk.MenuItem(
+                label=_model_label(*self._current_model)
+            )
+            self._model_item.set_sensitive(False)
+            menu.append(self._model_item)
+
         menu.append(self._gtk.SeparatorMenuItem())
+
+        if self._model_menu and self._on_model_selected:
+            menu.append(self._build_model_submenu())
+            menu.append(self._gtk.SeparatorMenuItem())
 
         hotkeys_item = self._gtk.MenuItem(label="Hotkeys...")
         hotkeys_item.connect("activate", self._on_hotkeys_clicked)
@@ -168,6 +191,45 @@ class SystemTray:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             logger.debug("notify-send not available")
+
+    def _build_model_submenu(self) -> Any:
+        """Build the Model submenu; the active entry carries a check mark."""
+        root = self._gtk.MenuItem(label="Model")
+        submenu = self._gtk.Menu()
+        for engine, models in self._model_menu:
+            for model in models:
+                item = self._gtk.MenuItem(
+                    label=self._model_item_label(engine, model)
+                )
+                item.connect("activate", self._on_model_clicked, engine, model)
+                self._model_items[(engine, model)] = item
+                submenu.append(item)
+        root.set_submenu(submenu)
+        return root
+
+    def _model_item_label(self, engine: str, model: str) -> str:
+        prefix = "✓ " if (engine, model) == self._current_model else "   "
+        return f"{prefix}{engine}: {model}"
+
+    def set_model(self, engine: str, model: str) -> None:
+        """Update the current-model display and submenu check mark."""
+        self._current_model = (engine, model)
+        if not self._available:
+            return
+
+        def _update() -> None:
+            if self._model_item:
+                self._model_item.set_label(_model_label(engine, model))
+            for (item_engine, item_model), item in self._model_items.items():
+                item.set_label(self._model_item_label(item_engine, item_model))
+
+        self._glib.idle_add(_update)
+
+    def _on_model_clicked(self, _widget: Any, engine: str, model: str) -> None:
+        if (engine, model) == self._current_model:
+            return
+        if self._on_model_selected:
+            self._on_model_selected(engine, model)
 
     def _on_hotkeys_clicked(self, _widget: Any) -> None:
         if self._on_hotkeys:

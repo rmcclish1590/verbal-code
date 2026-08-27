@@ -304,11 +304,26 @@ class VerbalCode:
             on_deactivate=self._on_hotkey_released,
         )
         self._tray_enabled: bool = tray_cfg.get("enabled", True)
+        from verbal_code.transcriber import (
+            AVAILABLE_MODELS,
+            current_selection,
+            installed_engines,
+        )
+
+        model_menu = [
+            (engine, AVAILABLE_MODELS[engine])
+            for engine in installed_engines()
+            if engine in AVAILABLE_MODELS
+        ]
         self.tray = SystemTray(
             on_quit=self._on_tray_quit,
             on_hotkeys=self._on_hotkeys_requested,
             notifications=tray_cfg.get("notifications", True),
+            on_model_selected=self._on_model_requested,
+            model_menu=model_menu,
+            current_model=current_selection(config),
         )
+        self._model_switch_lock = threading.Lock()
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0.0
@@ -392,6 +407,64 @@ class VerbalCode:
         mods_str = "+".join(modifiers)
         logger.info("Hotkey updated to %s+%s", mods_str, key)
         self.tray.notify("Verbal Code", f"Hotkey changed to {mods_str}+{key}")
+
+    def _on_model_requested(self, engine: str, model: str) -> None:
+        """Tray callback: switch models off the GTK thread."""
+        threading.Thread(
+            target=self._switch_model, args=(engine, model), daemon=True
+        ).start()
+
+    def _switch_model(self, engine: str, model: str) -> None:
+        """Load the requested engine/model, swap it in, and persist the choice."""
+        from verbal_code.transcriber import apply_selection, create_transcriber
+
+        if self._recording:
+            self.tray.notify(
+                "Verbal Code", "Finish the current dictation before switching models"
+            )
+            return
+        if not self._model_switch_lock.acquire(blocking=False):
+            return
+        try:
+            self.tray.set_state(self._TrayState.PROCESSING)
+            self.tray.notify("Verbal Code", f"Loading {engine} ({model})...")
+            apply_selection(self.config, engine, model)
+            transcriber = create_transcriber(self.config)
+            transcriber.load_model()
+            self.transcriber = transcriber
+            self._live_injection = (
+                self._streaming_enabled and transcriber.supports_live_streaming
+            )
+            self._save_stt_selection(engine, model)
+            self.tray.set_model(engine, model)
+            self.tray.set_state(self._TrayState.IDLE)
+            self.tray.notify("Verbal Code", f"Now using {engine} ({model})")
+            logger.info("Switched STT to %s (%s)", engine, model)
+        except Exception as exc:
+            logger.error("Model switch to %s (%s) failed: %s", engine, model, exc)
+            self.tray.set_state(self._TrayState.ERROR)
+            self.tray.notify("Verbal Code", "Model switch failed — check logs")
+        finally:
+            self._model_switch_lock.release()
+
+    def _save_stt_selection(self, engine: str, model: str) -> None:
+        """Persist the engine/model choice to the config file."""
+        from verbal_code.transcriber import apply_selection
+
+        path = self._config_path
+        try:
+            if os.path.isfile(path):
+                with open(path) as f:
+                    cfg = yaml.safe_load(f) or {}
+            else:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                cfg = {}
+            apply_selection(cfg, engine, model)
+            with open(path, "w") as f:
+                yaml.safe_dump(cfg, f, default_flow_style=False)
+            logger.info("STT selection saved to %s", path)
+        except OSError as exc:
+            logger.warning("Could not persist model choice: %s", exc)
 
     def _on_hotkey_pressed(self) -> None:
         """Dispatch a hotkey press according to hotkey.mode.

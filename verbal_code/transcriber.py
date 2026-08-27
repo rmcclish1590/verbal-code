@@ -405,6 +405,56 @@ class MoonshineTranscriber(TranscriberBase):
         return
 
 
+# Model choices offered in the tray's quick-switch menu, per engine.
+AVAILABLE_MODELS: dict[str, list[str]] = {
+    "whisper": ["distil-small.en", "base.en", "small.en", "large-v3-turbo"],
+    "moonshine": ["moonshine/base", "moonshine/tiny"],
+    "vosk": ["vosk-model-small-en-us-0.15"],
+}
+
+_ENGINE_PACKAGES: dict[str, str] = {
+    "whisper": "faster_whisper",
+    "moonshine": "moonshine_onnx",
+    "vosk": "vosk",
+}
+
+
+def installed_engines() -> list[str]:
+    """Return the engines whose Python packages are importable."""
+    import importlib.util
+
+    return [
+        engine
+        for engine, package in _ENGINE_PACKAGES.items()
+        if importlib.util.find_spec(package) is not None
+    ]
+
+
+def current_selection(config: dict) -> tuple[str, str]:
+    """Return the (engine, model) pair the config currently selects."""
+    stt_cfg = config.get("stt", {})
+    engine: str = stt_cfg.get("engine", "whisper")
+    if engine == "vosk":
+        model = stt_cfg.get("vosk", {}).get("model_name", "vosk-model-small-en-us-0.15")
+    elif engine == "moonshine":
+        model = stt_cfg.get("moonshine", {}).get("model", "moonshine/base")
+    else:
+        model = stt_cfg.get("whisper", {}).get("model", "distil-small.en")
+    return engine, model
+
+
+def apply_selection(config: dict, engine: str, model: str) -> None:
+    """Write an (engine, model) choice into ``config`` in place."""
+    stt_cfg = config.setdefault("stt", {})
+    stt_cfg["engine"] = engine
+    if engine == "vosk":
+        stt_cfg.setdefault("vosk", {})["model_name"] = model
+    elif engine == "moonshine":
+        stt_cfg.setdefault("moonshine", {})["model"] = model
+    else:
+        stt_cfg.setdefault("whisper", {})["model"] = model
+
+
 def create_transcriber(config: dict) -> TranscriberBase:
     """Instantiate and return the transcriber specified by ``config['stt']['engine']``.
 
