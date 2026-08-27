@@ -292,7 +292,11 @@ class VerbalCode:
         )
         self.transcriber = create_transcriber(config)
         self.injector = create_injector(config)
-        self.text_processor = TextProcessor()
+        self.text_processor = TextProcessor(
+            punctuation_commands=config.get("injection", {}).get(
+                "punctuation_commands", True
+            )
+        )
         self.hotkey = create_hotkey_listener(
             modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
             key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),

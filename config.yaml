@@ -56,6 +56,11 @@ injection:
   # via the clipboard instead of typed (instant, regardless of length).
   # 0 disables the switch and always types.
   clipboard_threshold: 100
+  # Spoken commands: "period", "comma", "question mark", "exclamation mark",
+  # "colon", "semicolon", "ellipsis", "new line", "new paragraph", "full stop".
+  # Sentence starts are capitalised automatically. Disable to type command
+  # words literally.
+  punctuation_commands: true
 
 tray:
   enabled: true
