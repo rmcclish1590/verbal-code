@@ -1,6 +1,8 @@
+import threading
+
 from pynput.keyboard import Key, KeyCode
 
-from verbal_code.hotkeys import _normalize_key, _SPECIAL_KEY_MAP
+from verbal_code.hotkeys import HotkeyListener, _normalize_key, _SPECIAL_KEY_MAP
 
 
 class TestNormalizeKey:
@@ -34,3 +36,64 @@ class TestSpecialKeyMap:
     def test_escape_and_esc_both_map(self):
         assert _SPECIAL_KEY_MAP["esc"] is Key.esc
         assert _SPECIAL_KEY_MAP["escape"] is Key.esc
+
+
+class _Callback:
+    """Records invocations; hotkey callbacks run on daemon threads."""
+
+    def __init__(self):
+        self.event = threading.Event()
+
+    def __call__(self):
+        self.event.set()
+
+    def fired(self) -> bool:
+        return self.event.wait(timeout=2.0)
+
+
+def _make_listener(modifiers, key):
+    activate, deactivate = _Callback(), _Callback()
+    listener = HotkeyListener(
+        modifiers=modifiers,
+        key=key,
+        on_activate=activate,
+        on_deactivate=deactivate,
+    )
+    return listener, activate, deactivate
+
+
+class TestModifierOnlyCombo:
+    def test_activates_on_all_modifiers_held(self):
+        listener, activate, _ = _make_listener(["alt", "ctrl"], "super")
+        listener._on_press(Key.alt_l)
+        listener._on_press(Key.ctrl_l)
+        assert not listener.is_active
+        listener._on_press(Key.cmd_l)
+        assert activate.fired()
+        assert listener.is_active
+
+    def test_deactivates_on_any_release(self):
+        listener, activate, deactivate = _make_listener(["alt", "ctrl"], "super")
+        listener._on_press(Key.alt_l)
+        listener._on_press(Key.ctrl_l)
+        listener._on_press(Key.cmd_l)
+        assert activate.fired()
+        listener._on_release(Key.ctrl_l)
+        assert deactivate.fired()
+        assert not listener.is_active
+
+    def test_trigger_modifier_release_deactivates(self):
+        listener, activate, deactivate = _make_listener(["alt", "ctrl"], "super")
+        listener._on_press(Key.ctrl_l)
+        listener._on_press(Key.alt_l)
+        listener._on_press(Key.cmd_r)  # right-hand variant works too
+        assert activate.fired()
+        listener._on_release(Key.cmd_r)
+        assert deactivate.fired()
+
+    def test_normal_key_trigger_still_works(self):
+        listener, activate, _ = _make_listener(["super", "alt"], "space")
+        listener._on_press(Key.cmd_l)
+        listener._on_press(Key.alt_l)
+        listener._on_press(Key.space)
+        assert activate.fired()

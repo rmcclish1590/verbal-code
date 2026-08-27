@@ -63,6 +63,9 @@ class HotkeyListener:
     ):
         self._required_modifiers = modifiers
         key_lower = key.lower()
+        # Modifier-only combos (e.g. ctrl+alt+super) use a modifier as the
+        # trigger; it is matched by modifier name rather than normalized key.
+        self._trigger_is_modifier = key_lower in _MODIFIER_MAP
         self._trigger_key: Key | str = _SPECIAL_KEY_MAP.get(key_lower, key_lower)
         self._on_activate = on_activate
         self._on_deactivate = on_deactivate
@@ -90,14 +93,18 @@ class HotkeyListener:
             m in self._pressed_modifiers for m in self._required_modifiers
         )
 
+    def _is_trigger(self, key: _PynputKey) -> bool:
+        if self._trigger_is_modifier:
+            return self._modifier_name(key) == self._trigger_key
+        return _normalize_key(key) == self._trigger_key
+
     def _on_press(self, key: _PynputKey) -> None:
         with self._lock:
             mod = self._modifier_name(key)
             if mod:
                 self._pressed_modifiers.add(mod)
 
-            normalized = _normalize_key(key)
-            if normalized == self._trigger_key:
+            if self._is_trigger(key):
                 self._trigger_held = True
 
             if not self._active and self._check_combo():
@@ -112,8 +119,7 @@ class HotkeyListener:
             if mod:
                 self._pressed_modifiers.discard(mod)
 
-            normalized = _normalize_key(key)
-            if normalized == self._trigger_key:
+            if self._is_trigger(key):
                 self._trigger_held = False
 
             if was_active and not self._check_combo():
