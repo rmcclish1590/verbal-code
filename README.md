@@ -182,6 +182,9 @@ logging:
   file: null           # or path to log file
 ```
 
+Every completed dictation logs its end-to-end latency (hotkey release →
+text on screen) as a single greppable line: `dictation_latency_ms=432`.
+
 ## Architecture
 
 ```

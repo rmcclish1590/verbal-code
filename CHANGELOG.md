@@ -12,6 +12,10 @@ below as MCC-NN).
 
 ### Added
 
+- Every completed dictation logs its hotkey-release→text-on-screen latency as
+  `dictation_latency_ms=<value>` at INFO, for performance monitoring
+  (MCC-30).
+
 - Test coverage grew from 23 to 158 tests, now spanning transcriber stream
   gating and delta logic, Vosk streaming, silence trimming, audio-capture
   buffering, hotkey capture/dispatch, injector routing, config validation,
