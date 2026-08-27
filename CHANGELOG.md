@@ -12,6 +12,10 @@ below as MCC-NN).
 
 ### Added
 
+- Toggle-to-dictate mode (`hotkey.mode: "toggle"`): press the hotkey once to
+  start recording and again to stop, alongside the default push-to-talk
+  (MCC-13).
+
 - Wayland support: on a Wayland session, global hotkeys are read via an evdev
   listener (requires membership in the `input` group) and injection prefers
   ydotool automatically (MCC-12).
