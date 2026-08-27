@@ -40,11 +40,18 @@ APT_PACKAGES=(
     libportaudio2
     portaudio19-dev
     python3-gi
-    gir1.2-appindicator3-0.1
     libnotify-bin
     python3-venv
     python3-dev
 )
+
+# Prefer the maintained Ayatana indicator library; older releases only ship
+# the legacy AppIndicator3. The tray code accepts either at runtime.
+if apt-cache show gir1.2-ayatanaappindicator3-0.1 &>/dev/null; then
+    APT_PACKAGES+=(gir1.2-ayatanaappindicator3-0.1)
+else
+    APT_PACKAGES+=(gir1.2-appindicator3-0.1)
+fi
 
 MISSING=()
 for pkg in "${APT_PACKAGES[@]}"; do
