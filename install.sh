@@ -91,6 +91,14 @@ STT_CHOICE="${STT_CHOICE:-1}"
 info "Installing core dependencies..."
 "$PIP" install --quiet PyYAML numpy sounddevice pynput evdev
 
+# Older installs pulled in torch (~2 GB) for Silero VAD; faster-whisper's
+# bundled ONNX VAD replaced it, so reclaim the space on upgrade.
+if "$PIP" show torch &>/dev/null; then
+    info "Removing obsolete torch dependency (~2 GB)..."
+    "$PIP" uninstall --quiet -y torch torchaudio 2>/dev/null || true
+    ok "torch removed"
+fi
+
 case "$STT_CHOICE" in
     1)
         info "Installing faster-whisper..."
