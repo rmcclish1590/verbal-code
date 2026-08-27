@@ -1,9 +1,11 @@
 import os
+import sys
 import tempfile
 
 import pytest
 
-from verbal_code.app import load_config, validate_config
+from verbal_code import app
+from verbal_code.app import load_config, main, validate_config
 
 
 class TestLoadConfig:
@@ -70,3 +72,34 @@ class TestValidateConfig:
             "audio": {"sample_rate": 16000},
         }
         validate_config(config)
+
+
+class TestMainValidatesBeforeTestModes:
+    """validate_config must run before the diagnostic modes (MCC-6)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+    @pytest.mark.parametrize("flag", ["--test-audio", "--test-transcribe", "--test-inject"])
+    def test_test_modes_run_after_validation(self, monkeypatch, flag):
+        runner = "_run" + flag.replace("--", "_").replace("-", "_")
+        monkeypatch.setattr("sys.argv", ["verbal-code", flag])
+        monkeypatch.setattr(app, "validate_config", lambda config: sys.exit(1))
+        monkeypatch.setattr(
+            app, runner, lambda config: pytest.fail(f"{runner} ran before validate_config")
+        )
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_list_devices_skips_validation(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["verbal-code", "--list-devices"])
+        monkeypatch.setattr(
+            app,
+            "validate_config",
+            lambda config: pytest.fail("validate_config ran for --list-devices"),
+        )
+        monkeypatch.setattr(app, "_run_list_devices", lambda: None)
+        with pytest.raises(SystemExit):
+            main()

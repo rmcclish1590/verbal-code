@@ -494,6 +494,11 @@ def main() -> None:
     if args.list_devices:
         _run_list_devices()
         sys.exit(0)
+
+    # Validate before the remaining diagnostic modes so a missing STT package
+    # produces the friendly install hint instead of a raw traceback.
+    validate_config(config)
+
     if args.test_audio:
         _run_test_audio(config)
         sys.exit(0)
@@ -506,7 +511,6 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-    validate_config(config)
 
     config_path = resolve_config_path(args.config)
 
