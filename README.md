@@ -170,6 +170,10 @@ tray:
   notifications: true
 ```
 
+The tray menu shows the current status and active engine/model. The **Model**
+submenu switches between the models of every installed engine on the fly — the
+new model loads in the background and the choice is saved to the config file.
+
 ### Logging
 
 ```yaml

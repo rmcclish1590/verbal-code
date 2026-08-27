@@ -1,6 +1,14 @@
 import numpy as np
 
-from verbal_code.transcriber import TranscriberBase, VoskTranscriber, WhisperTranscriber
+from verbal_code.transcriber import (
+    AVAILABLE_MODELS,
+    TranscriberBase,
+    VoskTranscriber,
+    WhisperTranscriber,
+    apply_selection,
+    current_selection,
+    installed_engines,
+)
 
 
 class _FakeSegment:
@@ -129,3 +137,34 @@ class TestTranscriberBaseStreamingDefaults:
         t = self._Minimal()
         assert t.stream_finalize() == ""
         assert TranscriberBase.supports_live_streaming is False
+
+
+class TestModelSelectionHelpers:
+    def test_current_selection_defaults(self):
+        assert current_selection({}) == ("whisper", "distil-small.en")
+
+    def test_current_selection_per_engine(self):
+        cfg = {"stt": {"engine": "vosk", "vosk": {"model_name": "vosk-model-small-en-us-0.15"}}}
+        assert current_selection(cfg) == ("vosk", "vosk-model-small-en-us-0.15")
+        cfg = {"stt": {"engine": "moonshine", "moonshine": {"model": "moonshine/tiny"}}}
+        assert current_selection(cfg) == ("moonshine", "moonshine/tiny")
+
+    def test_apply_selection_round_trips(self):
+        cfg: dict = {}
+        apply_selection(cfg, "whisper", "small.en")
+        assert current_selection(cfg) == ("whisper", "small.en")
+        apply_selection(cfg, "moonshine", "moonshine/base")
+        assert current_selection(cfg) == ("moonshine", "moonshine/base")
+
+    def test_apply_selection_preserves_other_settings(self):
+        cfg = {"stt": {"whisper": {"beam_size": 3}}}
+        apply_selection(cfg, "whisper", "base.en")
+        assert cfg["stt"]["whisper"]["beam_size"] == 3
+        assert cfg["stt"]["whisper"]["model"] == "base.en"
+
+    def test_installed_engines_includes_whisper_in_dev_env(self):
+        assert "whisper" in installed_engines()
+
+    def test_available_models_cover_installed_engines(self):
+        for engine in ("whisper", "moonshine", "vosk"):
+            assert AVAILABLE_MODELS[engine]

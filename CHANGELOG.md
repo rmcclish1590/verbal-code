@@ -12,6 +12,10 @@ below as MCC-NN).
 
 ### Added
 
+- Tray menu shows the active engine/model and offers a Model submenu for
+  switching between installed engines' models on the fly; the choice loads in
+  the background and persists to the config file (MCC-16).
+
 - Spoken punctuation and formatting commands ("period", "comma", "question
   mark", "new line", "new paragraph", ...), with automatic capitalisation of
   sentence starts; disable with `injection.punctuation_commands: false`
