@@ -77,7 +77,25 @@ def validate_config(config: dict) -> None:
         if section not in config:
             logger.warning("Missing config section '%s', using defaults", section)
 
-    _assert_stt_engine_available(config.get("stt", {}).get("engine", "whisper"))
+    engine = config.get("stt", {}).get("engine", "whisper")
+    _assert_stt_engine_available(engine)
+    _assert_sample_rate_supported(engine, config)
+
+
+def _assert_sample_rate_supported(engine: str, config: dict) -> None:
+    """Exit if the configured capture rate cannot work with the STT engine.
+
+    faster-whisper interprets raw numpy input as 16 kHz and does not resample,
+    so any other capture rate produces silently garbled transcriptions.
+    """
+    sample_rate = config.get("audio", {}).get("sample_rate", 16000)
+    if engine == "whisper" and sample_rate != 16000:
+        logger.error(
+            "audio.sample_rate is %d, but the whisper engine requires 16000. "
+            "Set audio.sample_rate: 16000 (or switch to the vosk engine).",
+            sample_rate,
+        )
+        sys.exit(1)
 
 
 def _assert_stt_engine_available(engine: str) -> None:
@@ -149,8 +167,15 @@ class VerbalCode:
 
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
+        stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
         vad_cfg = config.get("vad", {})
+
+        # Streaming transcription only matters when its partial results are
+        # consumed (live injection). Off by default: batch transcription on
+        # hotkey release covers normal dictation without the per-interval
+        # inference cost while recording.
+        self._streaming_enabled: bool = stt_cfg.get("streaming_enabled", False)
 
         self.capture = AudioCapture(
             sample_rate=audio_cfg.get("sample_rate", 16000),
@@ -206,6 +231,10 @@ class VerbalCode:
     def stop(self) -> None:
         """Gracefully shut down all subsystems."""
         self.hotkey.stop()
+        self._stream_stop.set()
+        if self._stream_thread is not None:
+            self._stream_thread.join(timeout=2.0)
+            self._stream_thread = None
         if self._recording:
             self.capture.stop()
         if self._tray_enabled:
@@ -261,10 +290,11 @@ class VerbalCode:
                 self.vad.reset()
             self._stream_stop.clear()
             self.capture.start()
-            self._stream_thread = threading.Thread(
-                target=self._streaming_loop, daemon=True
-            )
-            self._stream_thread.start()
+            if self._streaming_enabled:
+                self._stream_thread = threading.Thread(
+                    target=self._streaming_loop, daemon=True
+                )
+                self._stream_thread.start()
             self.tray.set_state(self._TrayState.LISTENING)
             logger.info("Dictation started")
 
@@ -280,11 +310,21 @@ class VerbalCode:
                     continue
                 chunk = speech
 
-            for text in self.transcriber.transcribe_stream(chunk):
-                if text:
-                    logger.debug("[stream] %s", text)
-                    # Uncomment to enable live injection of partial results:
-                    # self.injector.inject(self.text_processor.process(text))
+            self._emit_stream_text(chunk)
+
+        # Speech still buffered in the VAD when the hotkey was released would
+        # otherwise be dropped silently.
+        if self.vad and self.vad.available:
+            tail = self.vad.flush()
+            if tail is not None:
+                self._emit_stream_text(tail)
+
+    def _emit_stream_text(self, chunk: object) -> None:
+        for text in self.transcriber.transcribe_stream(chunk):  # type: ignore[arg-type]
+            if text:
+                logger.debug("[stream] %s", text)
+                # Uncomment to enable live injection of partial results:
+                # self.injector.inject(self.text_processor.process(text))
 
     def _on_dictation_stop(self) -> None:
         audio, duration = self._stop_recording()

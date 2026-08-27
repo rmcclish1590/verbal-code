@@ -1,12 +1,16 @@
 import logging
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 
 logger = logging.getLogger("verbal_code")
 
 _SUBPROCESS_TIMEOUT = 10
+
+# Slow applications process the synthesized Ctrl+V asynchronously; restoring the
+# clipboard too early makes them paste the restored (old) contents instead.
+_PASTE_SETTLE_SECONDS = 0.3
 
 
 class InjectorBase(ABC):
@@ -64,6 +68,7 @@ class ClipboardInjector(InjectorBase):
         saved_clipboard = self._read_clipboard()
         if not self._write_and_paste(text):
             return
+        time.sleep(_PASTE_SETTLE_SECONDS)
         self._restore_clipboard(saved_clipboard)
 
     def _read_clipboard(self) -> str:
@@ -79,12 +84,22 @@ class ClipboardInjector(InjectorBase):
 
     def _write_and_paste(self, text: str) -> bool:
         try:
-            subprocess.run(
+            # stdout/stderr go to DEVNULL rather than pipes: xclip forks a
+            # daemon that inherits them, and reading a pipe to EOF would block
+            # until the daemon exits (i.e. until the clipboard is replaced).
+            write_result = subprocess.run(
                 ["xclip", "-selection", "clipboard"],
                 input=text,
                 text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
+            if write_result.returncode != 0:
+                logger.error(
+                    "xclip write failed with exit code %d", write_result.returncode
+                )
+                return False
             subprocess.run(
                 ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
                 capture_output=True,

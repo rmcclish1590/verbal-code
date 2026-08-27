@@ -58,6 +58,7 @@ Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special k
 ```yaml
 stt:
   engine: "whisper"    # or "vosk"
+  streaming_enabled: false  # incremental transcription while recording (see below)
   whisper:
     model: "base"      # tiny|base|small|medium|large-v3
     device: "auto"     # auto|cpu|cuda
@@ -67,6 +68,11 @@ stt:
   vosk:
     model_name: "vosk-model-small-en-us-0.15"
 ```
+
+`streaming_enabled` runs incremental transcription while you hold the hotkey.
+It is off by default: partial results are not yet injected live, and streaming
+costs continuous inference during recording. Final transcription on hotkey
+release is unaffected.
 
 **Whisper models** (accuracy vs speed):
 
@@ -82,19 +88,26 @@ stt:
 
 ```yaml
 audio:
-  sample_rate: 16000
+  sample_rate: 16000   # must stay 16000 for the whisper engine
   channels: 1
   chunk_size: 1024
   device: null         # null = default mic, or device index
 ```
+
+The whisper engine requires 16 kHz input (faster-whisper does not resample raw
+audio); the app refuses to start with another rate. Vosk accepts other rates.
 
 ### Text Injection
 
 ```yaml
 injection:
   method: "auto"       # auto|xdotool|clipboard|ydotool
-  delay_ms: 50
+  delay_ms: 0          # delay between keystrokes, in ms PER CHARACTER
 ```
+
+`delay_ms` is the pause between each simulated keystroke, not a one-time delay —
+at 50 a 200-character dictation takes 10 seconds to appear. Leave it at 0 unless
+an application drops characters.
 
 ### Voice Activity Detection
 

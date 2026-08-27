@@ -69,6 +69,7 @@ class WhisperTranscriber(TranscriberBase):
         self._lock = threading.Lock()
         self._stream_buffer: list[np.ndarray] = []
         self._stream_samples: int = 0
+        self._last_transcribed_samples: int = 0
         self._last_stream_text: str = ""
         self._stream_interval_samples = int(_STREAM_INTERVAL_SECONDS * sample_rate)
 
@@ -124,8 +125,12 @@ class WhisperTranscriber(TranscriberBase):
         self._stream_buffer.append(chunk)
         self._stream_samples += len(chunk)
 
-        if self._stream_samples < self._stream_interval_samples:
+        # Run inference at most once per interval of *new* audio; otherwise every
+        # chunk after the first interval would re-transcribe the whole session.
+        new_samples = self._stream_samples - self._last_transcribed_samples
+        if new_samples < self._stream_interval_samples:
             return
+        self._last_transcribed_samples = self._stream_samples
 
         audio = np.concatenate(self._stream_buffer)
         stream_beam = max(1, self.beam_size // 2)
@@ -158,6 +163,7 @@ class WhisperTranscriber(TranscriberBase):
         """Clear the streaming buffer for the next dictation session."""
         self._stream_buffer = []
         self._stream_samples = 0
+        self._last_transcribed_samples = 0
         self._last_stream_text = ""
 
 

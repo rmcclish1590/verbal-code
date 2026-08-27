@@ -4,6 +4,9 @@ hotkey:
 
 stt:
   engine: "whisper"
+  # Run incremental transcription while recording. Only useful once live
+  # injection of partial results is implemented; costs continuous inference.
+  streaming_enabled: false
   whisper:
     model: "base"
     device: "auto"
@@ -21,7 +24,9 @@ audio:
 
 injection:
   method: "auto"
-  delay_ms: 50
+  # Delay between simulated keystrokes (xdotool --delay), in ms PER CHARACTER.
+  # 0 = as fast as possible; raise only if an app drops characters.
+  delay_ms: 0
 
 vad:
   enabled: true

@@ -29,12 +29,14 @@ _PynputKey = Key | KeyCode | None
 def _normalize_key(key: _PynputKey) -> Key | str | None:
     """Reduce a raw pynput key event to a canonical Key or lowercase string.
 
-    Returns None for key codes that cannot be represented (e.g. out-of-range
-    virtual key values).
+    With Ctrl held, pynput reports letter keys as control characters
+    (e.g. ``'\\x04'`` for ``d``), so a non-printable char falls through to the
+    virtual key code.  Returns None for key codes that cannot be represented
+    (e.g. out-of-range virtual key values).
     """
     if isinstance(key, Key):
         return key
-    if isinstance(key, KeyCode) and key.char:
+    if isinstance(key, KeyCode) and key.char and key.char.isprintable():
         return key.char.lower()
     if isinstance(key, KeyCode) and key.vk is not None:
         try:

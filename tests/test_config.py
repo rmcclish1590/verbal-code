@@ -53,3 +53,20 @@ class TestValidateConfig:
             except SystemExit:
                 pass
         assert "Missing config section" in caplog.text
+
+    def test_whisper_rejects_non_16k_sample_rate(self):
+        config = {
+            "hotkey": {},
+            "stt": {"engine": "whisper"},
+            "audio": {"sample_rate": 48000},
+        }
+        with pytest.raises(SystemExit):
+            validate_config(config)
+
+    def test_whisper_accepts_16k_sample_rate(self):
+        config = {
+            "hotkey": {},
+            "stt": {"engine": "whisper"},
+            "audio": {"sample_rate": 16000},
+        }
+        validate_config(config)
