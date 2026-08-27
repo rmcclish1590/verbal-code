@@ -56,3 +56,78 @@ class TestTrimSilence:
         audio = np.concatenate([_silence(1.0, amplitude=0.0001), quiet_speech])
         assert len(trim_silence(audio, SAMPLE_RATE, threshold_db=-40.0)) == 0
         assert len(trim_silence(audio, SAMPLE_RATE, threshold_db=-50.0)) > 0
+
+
+class _FakeStatus:
+    def __bool__(self):
+        return False
+
+
+def _push(capture, samples):
+    """Feed a chunk through the sounddevice callback path."""
+    indata = samples.reshape(-1, 1)
+    capture._callback(indata, len(samples), None, _FakeStatus())
+
+
+def _make_capture():
+    from verbal_code.audio import AudioCapture
+
+    capture = AudioCapture()
+    capture._running = True  # buffer logic only; no real stream
+    return capture
+
+
+class TestSingleBufferCapture:
+    def test_chunks_stored_once_and_read_in_order(self):
+        capture = _make_capture()
+        first = np.ones(4, dtype=np.float32)
+        second = np.full(4, 2, dtype=np.float32)
+        _push(capture, first)
+        _push(capture, second)
+
+        assert np.array_equal(capture.get_chunk(timeout=0), first)
+        assert np.array_equal(capture.get_chunk(timeout=0), second)
+        assert len(capture._chunks) == 2  # still in place for the batch path
+
+    def test_get_chunk_returns_none_when_drained(self):
+        capture = _make_capture()
+        _push(capture, np.ones(4, dtype=np.float32))
+        capture.get_chunk(timeout=0)
+        assert capture.get_chunk(timeout=0) is None
+
+    def test_get_all_chunks_returns_only_unread(self):
+        capture = _make_capture()
+        for value in (1, 2, 3):
+            _push(capture, np.full(4, value, dtype=np.float32))
+        capture.get_chunk(timeout=0)  # consume the first
+
+        remaining = capture.get_all_chunks()
+        assert [chunk[0] for chunk in remaining] == [2, 3]
+        assert capture.get_all_chunks() == []
+
+    def test_reading_does_not_affect_full_session_audio(self):
+        capture = _make_capture()
+        for value in (1, 2):
+            _push(capture, np.full(4, value, dtype=np.float32))
+        capture.get_chunk(timeout=0)
+        capture.get_all_chunks()
+
+        with capture._chunk_ready:
+            session = np.concatenate(capture._chunks)
+        assert len(session) == 8  # both chunks intact for batch transcription
+
+    def test_get_chunk_wakes_on_new_chunk(self):
+        import threading
+
+        capture = _make_capture()
+        result = []
+
+        def reader():
+            result.append(capture.get_chunk(timeout=2.0))
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        _push(capture, np.full(4, 7, dtype=np.float32))
+        thread.join(timeout=3.0)
+        assert not thread.is_alive()
+        assert result and result[0] is not None and result[0][0] == 7

@@ -1,5 +1,4 @@
 import logging
-import queue
 import threading
 import wave
 from typing import Any
@@ -49,10 +48,12 @@ def trim_silence(
 
 
 class AudioCapture:
-    """Captures audio from a sounddevice input stream into an in-memory queue.
+    """Captures audio from a sounddevice input stream into a single buffer.
 
-    Chunks are accumulated per-session so the full recording can be retrieved
-    on stop.  Thread-safe: start/stop are protected by an internal lock.
+    Chunks are appended once per callback; a read cursor lets the streaming
+    consumer walk the same list the batch path concatenates on stop, so
+    nothing is stored twice.  Thread-safe: buffer access is guarded by a
+    condition, start/stop by a lock.
     """
 
     def __init__(
@@ -67,8 +68,9 @@ class AudioCapture:
         self.chunk_size = chunk_size
         self.device_index = device_index
 
-        self._queue: queue.Queue[np.ndarray] = queue.Queue()
-        self._session_chunks: list[np.ndarray] = []
+        self._chunks: list[np.ndarray] = []
+        self._read_pos = 0
+        self._chunk_ready = threading.Condition()
         self._stream: sd.InputStream | None = None
         self._lock = threading.Lock()
         self._running = False
@@ -83,16 +85,18 @@ class AudioCapture:
         if status:
             logger.warning("Audio callback status: %s", status)
         chunk = indata[:, 0].copy()
-        self._queue.put(chunk)
-        self._session_chunks.append(chunk)
+        with self._chunk_ready:
+            self._chunks.append(chunk)
+            self._chunk_ready.notify_all()
 
     def start(self) -> None:
         """Open the input stream and begin collecting audio chunks."""
         with self._lock:
             if self._running:
                 return
-            self._queue = queue.Queue()
-            self._session_chunks = []
+            with self._chunk_ready:
+                self._chunks = []
+                self._read_pos = 0
             self._stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
@@ -118,30 +122,34 @@ class AudioCapture:
             self._stream.close()  # type: ignore[union-attr]
             self._stream = None
             self._running = False
-            logger.info(
-                "Audio capture stopped, %d chunks recorded",
-                len(self._session_chunks),
-            )
-            if self._session_chunks:
-                return np.concatenate(self._session_chunks)
+            with self._chunk_ready:
+                chunks = list(self._chunks)
+            logger.info("Audio capture stopped, %d chunks recorded", len(chunks))
+            if chunks:
+                return np.concatenate(chunks)
             return np.array([], dtype=np.float32)
 
     def get_chunk(self, timeout: float = 0.1) -> np.ndarray | None:
-        """Return the next available chunk, or None if the queue is empty."""
-        try:
-            return self._queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        """Return the next unread chunk, or None if none arrives in time.
+
+        Reading advances a cursor over the session buffer; the chunks stay in
+        place for the batch concatenation on stop.
+        """
+        with self._chunk_ready:
+            if self._read_pos >= len(self._chunks):
+                self._chunk_ready.wait(timeout)
+            if self._read_pos >= len(self._chunks):
+                return None
+            chunk = self._chunks[self._read_pos]
+            self._read_pos += 1
+            return chunk
 
     def get_all_chunks(self) -> list[np.ndarray]:
-        """Drain and return all chunks currently in the queue."""
-        chunks = []
-        while True:
-            try:
-                chunks.append(self._queue.get_nowait())
-            except queue.Empty:
-                break
-        return chunks
+        """Return all currently unread chunks and advance past them."""
+        with self._chunk_ready:
+            chunks = self._chunks[self._read_pos :]
+            self._read_pos = len(self._chunks)
+            return chunks
 
     @staticmethod
     def list_devices() -> str:
