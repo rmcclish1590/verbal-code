@@ -51,6 +51,9 @@ below as MCC-NN).
 
 ### Changed
 
+- Audio capture stores each chunk once: the streaming consumer walks the
+  session buffer with a read cursor instead of a second queue (MCC-22).
+
 - Default whisper `beam_size` lowered from 5 to 2 — roughly half the CPU
   latency with negligible accuracy loss on short dictations; set
   `stt.whisper.beam_size: 5` to restore the old behaviour (MCC-19).
