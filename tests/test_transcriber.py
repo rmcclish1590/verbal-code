@@ -168,3 +168,21 @@ class TestModelSelectionHelpers:
     def test_available_models_cover_installed_engines(self):
         for engine in ("whisper", "moonshine", "vosk"):
             assert AVAILABLE_MODELS[engine]
+
+
+class TestWhisperStreamDelta:
+    def test_delta_is_suffix_when_text_extends(self):
+        t = _make_transcriber()
+        t._last_stream_text = "hello world"
+        assert t._extract_delta("hello world how are you") == "how are you"
+
+    def test_revision_returns_full_text(self):
+        # Whisper revised an earlier word: no common prefix, so the full
+        # corrected text is returned (callers must not blind-append).
+        t = _make_transcriber()
+        t._last_stream_text = "hello wold"
+        assert t._extract_delta("hello world how") == "hello world how"
+
+    def test_first_delta_is_entire_text(self):
+        t = _make_transcriber()
+        assert t._extract_delta("hello") == "hello"
