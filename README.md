@@ -201,7 +201,7 @@ verbal-code/
     ├── hotkeys.py       # Global hotkey listener (pynput)
     ├── injector.py      # Text injection (xdotool/clipboard/ydotool)
     ├── transcriber.py   # STT engines (faster-whisper, moonshine, vosk)
-    └── tray.py          # System tray indicator (GTK3/AppIndicator)
+    └── tray.py          # System tray indicator (GTK3, Ayatana/AppIndicator)
 ```
 
 ## CLI Options

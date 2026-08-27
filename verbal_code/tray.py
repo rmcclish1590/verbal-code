@@ -51,6 +51,27 @@ def _model_label(engine: str, model: str) -> str:
     return f"Engine: {engine} · {model}"
 
 
+def _import_appindicator(gi: Any) -> Any:
+    """Return an AppIndicator3-compatible module, preferring Ayatana.
+
+    ``AppIndicator3 0.1`` is deprecated; Mint and modern Debian ship
+    ``gir1.2-ayatanaappindicator3-0.1`` instead.  Both expose the same API,
+    so whichever binds first is used.
+    """
+    try:
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3
+
+        logger.debug("Using AyatanaAppIndicator3")
+        return AyatanaAppIndicator3
+    except (ImportError, ValueError):
+        gi.require_version("AppIndicator3", "0.1")
+        from gi.repository import AppIndicator3
+
+        logger.debug("Using legacy AppIndicator3")
+        return AppIndicator3
+
+
 def _write_icons() -> None:
     """Render per-state SVG icon files into the icon cache directory."""
     os.makedirs(_ICON_DIR, exist_ok=True)
@@ -99,8 +120,8 @@ class SystemTray:
             import gi
 
             gi.require_version("Gtk", "3.0")
-            gi.require_version("AppIndicator3", "0.1")
-            from gi.repository import AppIndicator3, Gdk, GLib, Gtk
+            AppIndicator3 = _import_appindicator(gi)
+            from gi.repository import Gdk, GLib, Gtk
 
             self._gtk = Gtk
             self._gdk = Gdk

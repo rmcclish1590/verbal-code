@@ -51,6 +51,10 @@ below as MCC-NN).
 
 ### Changed
 
+- The tray prefers the maintained AyatanaAppIndicator3 library, falling back
+  to the deprecated AppIndicator3 where Ayatana isn't available; install.sh
+  installs whichever the distribution ships (MCC-23).
+
 - Audio capture stores each chunk once: the streaming consumer walks the
   session buffer with a read cursor instead of a second queue (MCC-22).
 
