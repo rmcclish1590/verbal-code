@@ -12,6 +12,12 @@ below as MCC-NN).
 
 ### Added
 
+- Test coverage grew from 23 to 158 tests, now spanning transcriber stream
+  gating and delta logic, Vosk streaming, silence trimming, audio-capture
+  buffering, hotkey capture/dispatch, injector routing, config validation,
+  and the app's dictation, model-switch, and live-streaming orchestration
+  (MCC-25).
+
 - Tray menu shows the active engine/model and offers a Model submenu for
   switching between installed engines' models on the fly; the choice loads in
   the background and persists to the config file (MCC-16).
