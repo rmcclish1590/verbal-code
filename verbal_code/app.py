@@ -18,6 +18,10 @@ _PRE_INJECT_DELAY_SECONDS = 0.05
 
 _KNOWN_CONFIG_SECTIONS = {"hotkey", "stt", "audio", "injection", "vad", "tray", "logging"}
 
+# Single source of truth for the default hotkey, matching config.yaml and README.
+DEFAULT_HOTKEY_MODIFIERS = ["super", "alt"]
+DEFAULT_HOTKEY_KEY = "space"
+
 _shutdown = False
 
 
@@ -195,8 +199,8 @@ class VerbalCode:
         self.injector = create_injector(config)
         self.text_processor = TextProcessor()
         self.hotkey = HotkeyListener(
-            modifiers=hotkey_cfg.get("modifiers", ["ctrl", "super", "alt"]),
-            key=hotkey_cfg.get("key", "d"),
+            modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
+            key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
             on_activate=self._on_dictation_start,
             on_deactivate=self._on_dictation_stop,
         )
@@ -222,8 +226,8 @@ class VerbalCode:
         self.hotkey.start()
         logger.info("Starting Verbal Code v%s", __version__)
         hotkey_cfg = self.config.get("hotkey", {})
-        mods = "+".join(hotkey_cfg.get("modifiers", ["ctrl", "super", "alt"]))
-        key = hotkey_cfg.get("key", "d")
+        mods = "+".join(hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS))
+        key = hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY)
         print(f"Verbal Code v{__version__} ready \u2014 hold {mods}+{key} to dictate")
 
     def stop(self) -> None:
@@ -250,8 +254,8 @@ class VerbalCode:
         editor = HotkeyEditorWindow(
             gtk=self.tray._gtk,
             gdk=self.tray._gdk,
-            current_modifiers=hotkey_cfg.get("modifiers", ["ctrl", "super", "alt"]),
-            current_key=hotkey_cfg.get("key", "d"),
+            current_modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
+            current_key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
             config_path=self._config_path,
             on_save=self._on_hotkey_saved,
             on_recording_start=self.hotkey.stop,
