@@ -198,3 +198,53 @@ class TestLiveDictationStop:
 
         assert app._stream_thread is None
         assert not thread.is_alive()
+
+
+class TestDictationLatencyLogging:
+    def test_successful_cycle_logs_latency(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber(text="hello"))
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        lines = [r.message for r in caplog.records if "dictation_latency_ms=" in r.message]
+        assert len(lines) == 1
+        latency = int(lines[0].split("=")[1])
+        assert 0 <= latency < 60_000
+
+    def test_skipped_cycle_logs_no_latency(self, caplog):
+        app = _make_app(_speech(seconds=0.1), _FakeTranscriber())
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert not any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+    def test_failed_transcription_logs_no_latency(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber(fail=True))
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert not any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+    def test_failed_injection_logs_no_latency(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber(text="hello"))
+
+        def _boom(text):
+            raise RuntimeError("no display")
+
+        app.injector.inject = _boom
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert not any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+    def test_live_cycle_logs_latency(self, caplog):
+        transcriber = _FakeTranscriber(tail="last words")
+        transcriber.supports_live_streaming = True
+        app = _make_app(_speech(), transcriber, live=True)
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+    def test_live_cycle_with_empty_tail_still_logs(self, caplog):
+        transcriber = _FakeTranscriber(tail="")
+        transcriber.supports_live_streaming = True
+        app = _make_app(_speech(), transcriber, live=True)
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert any("dictation_latency_ms=" in r.message for r in caplog.records)

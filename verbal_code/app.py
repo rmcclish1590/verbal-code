@@ -527,6 +527,10 @@ class VerbalCode:
             logger.error("Live injection failed: %s", exc)
 
     def _on_dictation_stop(self) -> None:
+        # Timer for the release→text-on-screen latency metric; this handler
+        # runs the moment the hotkey is released.
+        released_at = time.monotonic()
+
         audio, duration = self._stop_recording()
         if audio is None:
             return
@@ -534,7 +538,8 @@ class VerbalCode:
         self._join_stream_thread()
 
         if self._live_injection:
-            self._finish_live_dictation()
+            if self._finish_live_dictation():
+                self._log_dictation_latency(released_at)
             return
 
         if duration < self.MIN_AUDIO_SECONDS:
@@ -550,7 +555,13 @@ class VerbalCode:
         if text is None:
             return
 
-        self._inject_text(text)
+        if self._inject_text(text):
+            self._log_dictation_latency(released_at)
+
+    def _log_dictation_latency(self, released_at: float) -> None:
+        """Log the hotkey-release→injection-complete latency for this cycle."""
+        elapsed_ms = int((time.monotonic() - released_at) * 1000)
+        logger.info("dictation_latency_ms=%d", elapsed_ms)
 
     def _join_stream_thread(self) -> None:
         """Stop the per-session streaming thread and wait for it to drain."""
@@ -562,18 +573,22 @@ class VerbalCode:
             logger.warning("Streaming thread did not stop within timeout")
         self._stream_thread = None
 
-    def _finish_live_dictation(self) -> None:
-        """Flush and inject the stream tail; everything else already landed live."""
+    def _finish_live_dictation(self) -> bool:
+        """Flush and inject the stream tail; everything else already landed live.
+
+        Returns True when the cycle completed (with or without a tail to
+        inject), False on failure — the caller uses this for the latency log.
+        """
         try:
             tail = self.transcriber.stream_finalize()
         except Exception as exc:
             logger.error("Stream finalize failed: %s", exc)
             self.tray.set_state(self._TrayState.ERROR)
-            return
+            return False
         if tail.strip():
-            self._inject_text(self.text_processor.process(tail))
-        else:
-            self.tray.set_state(self._TrayState.IDLE)
+            return self._inject_text(self.text_processor.process(tail))
+        self.tray.set_state(self._TrayState.IDLE)
+        return True
 
     def _stop_recording(self) -> tuple[object, float]:
         """Stop the audio stream and return (audio, duration).
@@ -641,17 +656,22 @@ class VerbalCode:
         logger.info("Transcribed: %s", text)
         return text
 
-    def _inject_text(self, text: str) -> None:
-        """Inject ``text`` into the focused window after a brief settle delay."""
+    def _inject_text(self, text: str) -> bool:
+        """Inject ``text`` into the focused window after a brief settle delay.
+
+        Returns True when the injection completed, False on failure.
+        """
         time.sleep(_PRE_INJECT_DELAY_SECONDS)
         try:
             self.injector.inject(text)
             logger.info("Text injected")
             self.tray.set_state(self._TrayState.IDLE)
+            return True
         except Exception as exc:
             logger.error("Injection failed: %s", exc)
             self.tray.set_state(self._TrayState.ERROR)
             self.tray.notify("Verbal Code", "Injection failed \u2014 check logs for details")
+            return False
 
 
 # ---------------------------------------------------------------------------
