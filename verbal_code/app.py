@@ -174,21 +174,63 @@ def _assert_stt_engine_available(engine: str) -> None:
             sys.exit(1)
 
 
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+def _resolve_log_file(path: object) -> str | None:
+    """Return a usable log file path, or None if the value is unsafe.
+
+    The path is user-controlled config; expanding ``~`` and refusing
+    symlinks/directories keeps a crafted value from redirecting log writes
+    onto an arbitrary file, and a missing parent directory becomes a warning
+    instead of a FileHandler traceback.
+    """
+    resolved = os.path.expanduser(str(path))
+    if os.path.islink(resolved):
+        logger.warning("logging.file %r is a symlink; file logging disabled", path)
+        return None
+    if os.path.isdir(resolved):
+        logger.warning("logging.file %r is a directory; file logging disabled", path)
+        return None
+    parent = os.path.dirname(resolved) or "."
+    if not os.path.isdir(parent):
+        logger.warning(
+            "logging.file directory %r does not exist; file logging disabled", parent
+        )
+        return None
+    return resolved
+
+
 def setup_logging(config: dict) -> None:
-    """Configure the root logger from the ``logging`` section of ``config``."""
+    """Configure the root logger from the ``logging`` section of ``config``.
+
+    Console logging is configured first so problems with ``logging.file``
+    can be reported; an unusable file path degrades to console-only logging
+    rather than aborting startup.
+    """
     log_cfg = config.get("logging", {})
     level = log_cfg.get("level", "INFO").upper()
-    log_file: str | None = log_cfg.get("file")
-
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
-    if log_file:
-        handlers.append(logging.FileHandler(log_file))
 
     logging.basicConfig(
         level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=handlers,
+        format=_LOG_FORMAT,
+        handlers=[logging.StreamHandler(sys.stderr)],
+        force=True,
     )
+
+    log_file = log_cfg.get("file")
+    if not log_file:
+        return
+    resolved = _resolve_log_file(log_file)
+    if resolved is None:
+        return
+    try:
+        handler = logging.FileHandler(resolved)
+    except OSError as exc:
+        logger.warning("Cannot open logging.file %r: %s", log_file, exc)
+        return
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.getLogger().addHandler(handler)
 
 
 class VerbalCode:
