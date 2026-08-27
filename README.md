@@ -66,7 +66,7 @@ stt:
     device: "auto"           # auto|cpu|cuda
     compute_type: "int8"
     language: "en"
-    beam_size: 5
+    beam_size: 2          # 2 = fast; 5 = slightly more accurate, ~2x slower on CPU
     batch_size: 8            # parallel-decode batch for the batched pipeline
     initial_prompt: ""       # vocabulary hint, e.g. names/jargon to spell
   moonshine:
