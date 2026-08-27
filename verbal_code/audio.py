@@ -14,6 +14,40 @@ _PCM_MIN_AMPLITUDE = -32768
 _PCM_SAMPLE_WIDTH = 2
 
 
+def trim_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    threshold_db: float = -40.0,
+    frame_ms: int = 30,
+    padding_ms: int = 150,
+) -> np.ndarray:
+    """Trim leading and trailing silence from float32 audio in [-1, 1].
+
+    Frames of ``frame_ms`` are classified by RMS energy against
+    ``threshold_db`` (relative to full scale); everything before the first and
+    after the last voiced frame is dropped, keeping ``padding_ms`` of context
+    on each side so soft utterance onsets aren't clipped.  Returns an empty
+    array when no frame crosses the threshold, and the input unchanged when it
+    is shorter than one frame.
+    """
+    frame_len = max(1, int(sample_rate * frame_ms / 1000))
+    n_frames = len(audio) // frame_len
+    if n_frames == 0:
+        return audio
+
+    frames = audio[: n_frames * frame_len].reshape(n_frames, frame_len)
+    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    threshold = 10.0 ** (threshold_db / 20.0)
+    voiced = np.flatnonzero(rms > threshold)
+    if voiced.size == 0:
+        return audio[:0]
+
+    padding = int(sample_rate * padding_ms / 1000)
+    start = max(0, int(voiced[0]) * frame_len - padding)
+    end = min(len(audio), (int(voiced[-1]) + 1) * frame_len + padding)
+    return audio[start:end]
+
+
 class AudioCapture:
     """Captures audio from a sounddevice input stream into an in-memory queue.
 

@@ -182,6 +182,13 @@ class VerbalCode:
         hotkey_cfg = config.get("hotkey", {})
         stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
+        vad_cfg = config.get("vad", {})
+
+        # Energy-based trim of leading/trailing silence before batch
+        # transcription. Whisper's built-in vad_filter would cope without it,
+        # but Vosk and Moonshine receive the raw capture otherwise.
+        self._trim_silence_enabled: bool = vad_cfg.get("trim_silence", True)
+        self._trim_threshold_db: float = vad_cfg.get("trim_threshold_db", -40.0)
 
         # Streaming transcription only matters when its partial results are
         # consumed (live injection). Off by default: batch transcription on
@@ -210,9 +217,6 @@ class VerbalCode:
             on_hotkeys=self._on_hotkeys_requested,
             notifications=tray_cfg.get("notifications", True),
         )
-        # Voice-activity detection is handled inside the transcription pipeline
-        # (faster-whisper's BatchedInferencePipeline segments with Silero VAD),
-        # so no separate VAD pass runs during capture.
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0.0
@@ -302,21 +306,7 @@ class VerbalCode:
             chunk = self.capture.get_chunk(timeout=0.1)
             if chunk is None:
                 continue
-
-            if self.vad and self.vad.available:
-                speech = self.vad.process_chunk(chunk)
-                if speech is None:
-                    continue
-                chunk = speech
-
             self._emit_stream_text(chunk)
-
-        # Speech still buffered in the VAD when the hotkey was released would
-        # otherwise be dropped silently.
-        if self.vad and self.vad.available:
-            tail = self.vad.flush()
-            if tail is not None:
-                self._emit_stream_text(tail)
 
     def _emit_stream_text(self, chunk: object) -> None:
         for text in self.transcriber.transcribe_stream(chunk):  # type: ignore[arg-type]
@@ -333,6 +323,10 @@ class VerbalCode:
         if duration < self.MIN_AUDIO_SECONDS:
             logger.info("Audio too short (%.2fs), skipping transcription", duration)
             self.tray.set_state(self._TrayState.IDLE)
+            return
+
+        audio = self._trim_batch_audio(audio, duration)
+        if audio is None:
             return
 
         text = self._run_transcription(audio)
@@ -358,6 +352,35 @@ class VerbalCode:
             logger.info("Dictation stopped (%.2fs of audio)", duration)
 
         return audio, duration
+
+    def _trim_batch_audio(self, audio: object, duration: float) -> object | None:
+        """Trim leading/trailing silence before batch transcription.
+
+        Returns None (and resets the tray) when the recording contains no
+        audible speech at all, so callers can skip transcription entirely.
+        """
+        if not self._trim_silence_enabled:
+            return audio
+
+        from verbal_code.audio import trim_silence
+
+        sample_rate = self.config.get("audio", {}).get("sample_rate", 16000)
+        trimmed = trim_silence(
+            audio,  # type: ignore[arg-type]
+            sample_rate,
+            threshold_db=self._trim_threshold_db,
+        )
+        if len(trimmed) == 0:
+            logger.info("No speech detected (recording below silence threshold)")
+            self.tray.set_state(self._TrayState.IDLE)
+            return None
+
+        trimmed_duration = len(trimmed) / sample_rate
+        if trimmed_duration < duration:
+            logger.info(
+                "Trimmed silence: %.2fs -> %.2fs", duration, trimmed_duration
+            )
+        return trimmed
 
     def _run_transcription(self, audio: object) -> str | None:
         """Run batch transcription; return the processed text or None on failure."""
