@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from typing import Any
 
 import numpy as np
@@ -11,6 +12,7 @@ import numpy as np
 logger = logging.getLogger("verbal_code")
 
 _DEFAULT_SAMPLE_RATE = 16000
+_STREAM_INTERVAL_SECONDS = 1.5
 _VOSK_PCM_CHUNK_SIZE = 4000
 # Moonshine accepts 0.1s–64s per call; split long recordings into 30s windows.
 _MOONSHINE_CHUNK_SECONDS = 30
