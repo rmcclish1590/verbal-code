@@ -1,6 +1,9 @@
 hotkey:
   modifiers: ["super", "alt"]
   key: "space"
+  # "hold" = push-to-talk (record while the chord is held).
+  # "toggle" = press once to start, press again to stop.
+  mode: "hold"
 
 stt:
   engine: "whisper"

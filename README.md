@@ -53,6 +53,8 @@ hotkey:
 
 Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special keys like `space`, `tab`, `enter` are supported. Modifier-only combos work too — set `key` to a modifier name (e.g. `modifiers: ["alt", "ctrl"]`, `key: "super"` for Alt+Ctrl+Super); in the hotkey dialog, hold the modifiers and release to capture such a combo.
 
+`mode` selects how the hotkey behaves: `"hold"` (default) is push-to-talk — recording lasts while the chord is held; `"toggle"` starts recording on one press and stops on the next, so long dictations don't require holding the chord.
+
 ### STT Engine
 
 ```yaml

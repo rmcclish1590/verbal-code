@@ -87,6 +87,11 @@ def validate_config(config: dict) -> None:
     _assert_numeric_values(config)
     _assert_sample_rate_supported(engine, config)
 
+    mode = config.get("hotkey", {}).get("mode", "hold")
+    if mode not in ("hold", "toggle"):
+        logger.error("hotkey.mode must be 'hold' or 'toggle', got %r", mode)
+        sys.exit(1)
+
 
 # (section path, key, expected type, min, max) — bounds are inclusive. Values
 # outside these ranges either crash the subsystems or exhaust resources
@@ -261,6 +266,7 @@ class VerbalCode:
 
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
+        self._hotkey_mode: str = hotkey_cfg.get("mode", "hold")
         stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
         vad_cfg = config.get("vad", {})
@@ -289,8 +295,8 @@ class VerbalCode:
         self.hotkey = create_hotkey_listener(
             modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
             key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
-            on_activate=self._on_dictation_start,
-            on_deactivate=self._on_dictation_stop,
+            on_activate=self._on_hotkey_pressed,
+            on_deactivate=self._on_hotkey_released,
         )
         self._tray_enabled: bool = tray_cfg.get("enabled", True)
         self.tray = SystemTray(
@@ -329,7 +335,11 @@ class VerbalCode:
         hotkey_cfg = self.config.get("hotkey", {})
         mods = "+".join(hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS))
         key = hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY)
-        print(f"Verbal Code v{__version__} ready \u2014 hold {mods}+{key} to dictate")
+        if self._hotkey_mode == "toggle":
+            action = f"press {mods}+{key} to start/stop dictation"
+        else:
+            action = f"hold {mods}+{key} to dictate"
+        print(f"Verbal Code v{__version__} ready \u2014 {action}")
 
     def stop(self) -> None:
         """Gracefully shut down all subsystems."""
@@ -370,13 +380,29 @@ class VerbalCode:
         self.hotkey = create_hotkey_listener(
             modifiers=modifiers,
             key=key,
-            on_activate=self._on_dictation_start,
-            on_deactivate=self._on_dictation_stop,
+            on_activate=self._on_hotkey_pressed,
+            on_deactivate=self._on_hotkey_released,
         )
         self.hotkey.start()
         mods_str = "+".join(modifiers)
         logger.info("Hotkey updated to %s+%s", mods_str, key)
         self.tray.notify("Verbal Code", f"Hotkey changed to {mods_str}+{key}")
+
+    def _on_hotkey_pressed(self) -> None:
+        """Dispatch a hotkey press according to hotkey.mode.
+
+        Hold mode starts recording (release stops it); toggle mode starts on
+        one press and stops on the next, so long dictations don't require
+        holding the chord.
+        """
+        if self._hotkey_mode == "toggle" and self._recording:
+            self._on_dictation_stop()
+        else:
+            self._on_dictation_start()
+
+    def _on_hotkey_released(self) -> None:
+        if self._hotkey_mode == "hold":
+            self._on_dictation_stop()
 
     def _on_dictation_start(self) -> None:
         with self._dictation_lock:
