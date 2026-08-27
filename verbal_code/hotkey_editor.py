@@ -80,7 +80,9 @@ class HotkeyEditorWindow:
         self._on_recording_stop = on_recording_stop
 
         self._recording = False
-        self._captured_modifiers: set[str] = set()
+        # Press order matters: a modifier-only combo uses the last-pressed
+        # modifier as the trigger key.
+        self._captured_modifiers: list[str] = []
         self._captured_key: str | None = None
         self._new_modifiers: list[str] | None = None
         self._new_key: str | None = None
@@ -92,6 +94,7 @@ class HotkeyEditorWindow:
         self._window.set_resizable(False)
         self._window.connect("destroy", self._on_window_destroy)
         self._window.connect("key-press-event", self._on_key_press)
+        self._window.connect("key-release-event", self._on_key_release)
 
         vbox = gtk.Box(orientation=gtk.Orientation.VERTICAL, spacing=12)
         vbox.set_margin_top(20)
@@ -132,7 +135,7 @@ class HotkeyEditorWindow:
 
     def _on_record_clicked(self, _widget: Any) -> None:
         self._recording = True
-        self._captured_modifiers.clear()
+        self._captured_modifiers = []
         self._captured_key = None
         self._new_label.set_text("Press your desired key combo...")
         self._record_btn.set_label("Recording...")
@@ -150,12 +153,10 @@ class HotkeyEditorWindow:
 
         mod_name = _GDK_MODIFIER_NAMES.get(keyval_name)
         if mod_name:
-            self._captured_modifiers.add(mod_name)
-            if self._captured_modifiers:
-                partial = "+".join(
-                    m.capitalize() for m in sorted(self._captured_modifiers)
-                )
-                self._new_label.set_text(f"New hotkey: {partial}+...")
+            if mod_name not in self._captured_modifiers:
+                self._captured_modifiers.append(mod_name)
+            partial = "+".join(m.capitalize() for m in self._captured_modifiers)
+            self._new_label.set_text(f"New hotkey: {partial}+...")
             return True
 
         # Non-modifier key — finalize capture
@@ -165,9 +166,36 @@ class HotkeyEditorWindow:
         self._finalize_capture()
         return True
 
+    def _on_key_release(self, _widget: Any, event: Any) -> bool:
+        """Finalize a modifier-only combo when its keys are released.
+
+        A combo of two or more modifiers (e.g. Alt+Ctrl+Super) has no
+        non-modifier trigger; releasing any of its keys completes the capture,
+        with the last-pressed modifier acting as the trigger key.  Releasing a
+        lone modifier abandons it so a fresh combo can be recorded.
+        """
+        if not self._recording or self._captured_key is not None:
+            return False
+
+        keyval_name = self._gdk.keyval_name(event.keyval)
+        if keyval_name is None or keyval_name not in _GDK_MODIFIER_NAMES:
+            return True
+
+        if len(self._captured_modifiers) >= 2:
+            self._captured_key = self._captured_modifiers[-1]
+            self._captured_modifiers = self._captured_modifiers[:-1]
+            self._finalize_capture()
+            return True
+
+        released = _GDK_MODIFIER_NAMES[keyval_name]
+        if released in self._captured_modifiers:
+            self._captured_modifiers.remove(released)
+        self._new_label.set_text("Press your desired key combo...")
+        return True
+
     def _finalize_capture(self) -> None:
         self._recording = False
-        self._new_modifiers = sorted(self._captured_modifiers)
+        self._new_modifiers = list(self._captured_modifiers)
         self._new_key = self._captured_key
         self._new_label.set_text(
             f"New hotkey: {_format_combo(self._new_modifiers, self._new_key)}"

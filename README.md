@@ -51,7 +51,7 @@ hotkey:
   key: "space"
 ```
 
-Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special keys like `space`, `tab`, `enter` are supported.
+Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special keys like `space`, `tab`, `enter` are supported. Modifier-only combos work too — set `key` to a modifier name (e.g. `modifiers: ["alt", "ctrl"]`, `key: "super"` for Alt+Ctrl+Super); in the hotkey dialog, hold the modifiers and release to capture such a combo.
 
 ### STT Engine
 
