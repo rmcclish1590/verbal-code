@@ -24,6 +24,12 @@ _PCM_MIN_AMPLITUDE = -32768
 class TranscriberBase(ABC):
     """Abstract interface for speech-to-text backends."""
 
+    #: True when :meth:`transcribe_stream` yields only *final* text that the
+    #: engine will never revise, making it safe to inject as it arrives.
+    #: Engines whose partials are revisable (Whisper re-decodes the whole
+    #: buffer each interval) must leave this False.
+    supports_live_streaming: bool = False
+
     @abstractmethod
     def load_model(self) -> None:
         """Load the model into memory.  May take several seconds on first call."""
@@ -38,6 +44,19 @@ class TranscriberBase(ABC):
     def reset(self) -> None:
         """Reset any internal state between dictation sessions."""
         ...
+
+    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
+        """Accumulate ``chunk`` and yield incremental text when available.
+
+        The default implementation yields nothing; engines without streaming
+        support fall back to batch transcription on hotkey release.
+        """
+        return
+        yield  # unreachable — turns this method into a generator
+
+    def stream_finalize(self) -> str:
+        """Return text for audio still buffered when the stream ends."""
+        return ""
 
 
 class WhisperTranscriber(TranscriberBase):
@@ -199,7 +218,14 @@ class WhisperTranscriber(TranscriberBase):
 
 
 class VoskTranscriber(TranscriberBase):
-    """Vosk-backed transcriber.  Lightweight; works offline without a GPU."""
+    """Vosk-backed transcriber.  Lightweight; works offline without a GPU.
+
+    Vosk's streaming recognizer finalises an utterance whenever it detects a
+    pause; finalised text is never revised afterwards, so it can be injected
+    live as each utterance completes.
+    """
+
+    supports_live_streaming = True
 
     def __init__(
         self,
@@ -268,6 +294,31 @@ class VoskTranscriber(TranscriberBase):
 
         text: str = result.get("text", "")
         logger.info("Vosk transcription done in %.2fs", time.monotonic() - t0)
+        return text
+
+    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
+        """Feed ``chunk`` to the recognizer; yield each utterance as it finalises."""
+        if self._model is None:
+            self.load_model()
+
+        pcm = self._to_pcm(np.asarray(chunk, dtype=np.float32))
+        with self._lock:
+            finalised = self._recognizer.AcceptWaveform(pcm)
+            text = (
+                json.loads(self._recognizer.Result()).get("text", "")
+                if finalised
+                else ""
+            )
+        if text:
+            yield text
+
+    def stream_finalize(self) -> str:
+        """Flush the utterance still open when the stream ended."""
+        if self._model is None:
+            return ""
+        with self._lock:
+            text: str = json.loads(self._recognizer.FinalResult()).get("text", "")
+            self._new_recognizer()
         return text
 
     def reset(self) -> None:

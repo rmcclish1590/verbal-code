@@ -74,9 +74,13 @@ stt:
 ```
 
 `streaming_enabled` runs incremental transcription while you hold the hotkey.
-It is off by default: partial results are not yet injected live, and streaming
-costs continuous inference during recording. Final transcription on hotkey
-release is unaffected.
+With the **vosk** engine, each utterance is injected live into the focused
+window as it finalises (a pause ends an utterance) — words appear while you
+speak, and releasing the hotkey just flushes the last utterance. Whisper and
+Moonshine produce revisable partial results that are unsafe to inject live, so
+with those engines streaming stays log-only and the text still arrives in one
+batch on release. Off by default: streaming costs continuous inference during
+recording.
 
 **Whisper models** (accuracy vs speed):
 
