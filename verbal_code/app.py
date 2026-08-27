@@ -120,6 +120,16 @@ def _assert_stt_engine_available(engine: str) -> None:
                 "Or run ./install.sh to set up everything."
             )
             sys.exit(1)
+    elif engine == "moonshine":
+        try:
+            import moonshine_onnx  # noqa: F401
+        except ImportError:
+            logger.error(
+                "moonshine is not installed. Install it with:\n"
+                "  pip install useful-moonshine-onnx\n"
+                "Or run ./install.sh to set up everything."
+            )
+            sys.exit(1)
 
 
 def setup_logging(config: dict) -> None:
@@ -142,9 +152,9 @@ def setup_logging(config: dict) -> None:
 class VerbalCode:
     """Top-level application object that wires together all subsystems.
 
-    Owns the audio capture, VAD, transcriber, text injector, hotkey listener,
-    and system tray.  Dictation sessions are driven by hotkey callbacks that
-    run on daemon threads.
+    Owns the audio capture, transcriber, text injector, hotkey listener, and
+    system tray.  A dictation session records audio while the hotkey is held
+    and transcribes it in a single batched pass on release.
     """
 
     MIN_AUDIO_SECONDS = 0.3
@@ -157,7 +167,6 @@ class VerbalCode:
         from verbal_code.injector import TextProcessor, create_injector
         from verbal_code.transcriber import create_transcriber
         from verbal_code.tray import SystemTray, TrayState
-        from verbal_code.vad import VoiceActivityDetector
 
         self._TrayState = TrayState
         self.config = config
@@ -169,7 +178,6 @@ class VerbalCode:
         hotkey_cfg = config.get("hotkey", {})
         stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
-        vad_cfg = config.get("vad", {})
 
         # Streaming transcription only matters when its partial results are
         # consumed (live injection). Off by default: batch transcription on
@@ -198,22 +206,12 @@ class VerbalCode:
             on_hotkeys=self._on_hotkeys_requested,
             notifications=tray_cfg.get("notifications", True),
         )
-        self._vad_enabled: bool = vad_cfg.get("enabled", True)
-        self.vad = (
-            VoiceActivityDetector(
-                threshold=vad_cfg.get("threshold", 0.5),
-                min_speech_ms=vad_cfg.get("min_speech_ms", 250),
-                silence_ms=vad_cfg.get("silence_ms", 500),
-                sample_rate=audio_cfg.get("sample_rate", 16000),
-            )
-            if self._vad_enabled
-            else None
-        )
+        # Voice-activity detection is handled inside the transcription pipeline
+        # (faster-whisper's BatchedInferencePipeline segments with Silero VAD),
+        # so no separate VAD pass runs during capture.
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0.0
-        self._stream_stop = threading.Event()
-        self._stream_thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Load the model, start subsystems, and print the ready banner."""
@@ -286,9 +284,6 @@ class VerbalCode:
             self._record_start = time.monotonic()
             self.text_processor.reset()
             self.transcriber.reset()
-            if self.vad:
-                self.vad.reset()
-            self._stream_stop.clear()
             self.capture.start()
             if self._streaming_enabled:
                 self._stream_thread = threading.Thread(
@@ -343,7 +338,7 @@ class VerbalCode:
         self._inject_text(text)
 
     def _stop_recording(self) -> tuple[object, float]:
-        """Stop the audio stream and streaming thread; return (audio, duration).
+        """Stop the audio stream and return (audio, duration).
 
         Returns (None, 0.0) if no recording was active so callers can guard
         early without duplicating the lock check.
@@ -352,16 +347,11 @@ class VerbalCode:
             if not self._recording:
                 return None, 0.0
             self._recording = False
-            self._stream_stop.set()
             audio = self.capture.stop()
             sample_rate = self.config.get("audio", {}).get("sample_rate", 16000)
             duration = len(audio) / sample_rate
             self.tray.set_state(self._TrayState.PROCESSING)
             logger.info("Dictation stopped (%.2fs of audio)", duration)
-
-        if self._stream_thread is not None:
-            self._stream_thread.join(timeout=2.0)
-            self._stream_thread = None
 
         return audio, duration
 

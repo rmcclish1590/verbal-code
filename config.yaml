@@ -8,13 +8,23 @@ stt:
   # injection of partial results is implemented; costs continuous inference.
   streaming_enabled: false
   whisper:
-    model: "base"
+    # English-only distil model: near-small accuracy at a lower CPU cost.
+    # Other good picks: "small.en" (more accurate, slower), "base.en" (faster).
+    model: "distil-small.en"
     device: "auto"
     compute_type: "int8"
     language: "en"
     beam_size: 5
+    # Parallel-decode batch size for BatchedInferencePipeline.
+    batch_size: 8
+    # Optional vocabulary hint to bias spelling of names/jargon, e.g.
+    # "Kaeden, numpy, ctranslate2, async, kwargs".
+    initial_prompt: ""
   vosk:
     model_name: "vosk-model-small-en-us-0.15"
+  # Moonshine: fast English-only ASR (onnxruntime, no torch). Good on weak CPUs.
+  moonshine:
+    model: "moonshine/base"  # or "moonshine/tiny" (faster, less accurate)
 
 audio:
   sample_rate: 16000
@@ -27,12 +37,6 @@ injection:
   # Delay between simulated keystrokes (xdotool --delay), in ms PER CHARACTER.
   # 0 = as fast as possible; raise only if an app drops characters.
   delay_ms: 0
-
-vad:
-  enabled: true
-  threshold: 0.5
-  min_speech_ms: 250
-  silence_ms: 500
 
 tray:
   enabled: true

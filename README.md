@@ -60,11 +60,15 @@ stt:
   engine: "whisper"    # or "vosk"
   streaming_enabled: false  # incremental transcription while recording (see below)
   whisper:
-    model: "base"      # tiny|base|small|medium|large-v3
-    device: "auto"     # auto|cpu|cuda
+    model: "distil-small.en" # see table below
+    device: "auto"           # auto|cpu|cuda
     compute_type: "int8"
     language: "en"
     beam_size: 5
+    batch_size: 8            # parallel-decode batch for the batched pipeline
+    initial_prompt: ""       # vocabulary hint, e.g. names/jargon to spell
+  moonshine:
+    model: "moonshine/base"  # or "moonshine/tiny"
   vosk:
     model_name: "vosk-model-small-en-us-0.15"
 ```
@@ -76,13 +80,28 @@ release is unaffected.
 
 **Whisper models** (accuracy vs speed):
 
-| Model    | Size   | Speed   | Accuracy | Best for          |
-|----------|--------|---------|----------|-------------------|
-| tiny     | ~75MB  | Fastest | Fair     | Quick notes       |
-| base     | ~140MB | Fast    | Good     | General use       |
-| small    | ~460MB | Medium  | Better   | Emails, messages  |
-| medium   | ~1.5GB | Slower  | Great    | Important docs    |
-| large-v3 | ~3GB   | Slowest | Best     | GPU recommended   |
+- **whisper** (default) — most accurate; batched single-pass on release.
+- **moonshine** — fast English-only ASR on onnxruntime (no torch). Lowest
+  latency on weak CPUs; great for short dictation. `base` ≈ Whisper-base
+  accuracy, `tiny` is faster. Install with `pip install useful-moonshine-onnx`.
+- **vosk** — lightweight streaming recognizer; lowest resource use, lower accuracy.
+
+Transcription runs as a single batched pass on hotkey release via faster-whisper's
+`BatchedInferencePipeline`, which segments the audio with Silero VAD and decodes
+segments in parallel — several times faster than a sequential pass on multi-segment
+audio. `condition_on_previous_text` is disabled to avoid repetition/hallucination
+loops on short dictations.
+
+**Whisper models** (accuracy vs speed). For English the `.en` / `distil` variants
+are more accurate than the multilingual models at the same size:
+
+| Model           | Size   | Speed   | Accuracy | Best for                  |
+|-----------------|--------|---------|----------|---------------------------|
+| tiny.en         | ~75MB  | Fastest | Fair     | Quick notes, weak CPUs    |
+| base.en         | ~140MB | Fast    | Good     | General use               |
+| distil-small.en | ~330MB | Medium  | Better   | Default — balanced on CPU |
+| small.en        | ~460MB | Medium  | Better+  | Emails, messages          |
+| large-v3-turbo  | ~1.6GB | Slower  | Great    | GPU recommended           |
 
 ### Audio
 
@@ -155,9 +174,8 @@ verbal-code/
     ├── audio.py         # Microphone capture (sounddevice)
     ├── hotkeys.py       # Global hotkey listener (pynput)
     ├── injector.py      # Text injection (xdotool/clipboard/ydotool)
-    ├── transcriber.py   # STT engines (faster-whisper, vosk)
-    ├── tray.py          # System tray indicator (GTK3/AppIndicator)
-    └── vad.py           # Voice activity detection (Silero VAD)
+    ├── transcriber.py   # STT engines (faster-whisper, moonshine, vosk)
+    └── tray.py          # System tray indicator (GTK3/AppIndicator)
 ```
 
 ## CLI Options
@@ -200,6 +218,9 @@ Run `verbal-code --list-devices` to see available inputs. Set `audio.device` in 
 
 **STT engine not installed:**
 If you see `ModuleNotFoundError: No module named 'faster_whisper'`, run the installer again or manually install: `~/.local/share/verbal-code/venv/bin/pip install faster-whisper`
+
+**`Python.h: No such file or directory` / "Failed building wheel for evdev" during install:**
+`pynput` pulls in `evdev`, which compiles from source on Python versions without a prebuilt wheel and needs the Python development headers. Install them and re-run the installer: `sudo apt install -y python3-dev` (current `install.sh` does this automatically).
 
 ## License
 

@@ -43,6 +43,7 @@ APT_PACKAGES=(
     gir1.2-appindicator3-0.1
     libnotify-bin
     python3-venv
+    python3-dev
 )
 
 MISSING=()
@@ -80,8 +81,9 @@ PYTHON="$VENV_DIR/bin/python"
 echo ""
 info "Choose STT engine(s) to install:"
 echo "  1) faster-whisper (recommended, ~200MB, GPU/CPU)"
-echo "  2) vosk (lightweight, ~40MB, CPU only)"
-echo "  3) both"
+echo "  2) moonshine (fast English-only, CPU/onnxruntime, no torch)"
+echo "  3) vosk (lightweight, ~40MB, CPU only)"
+echo "  4) all"
 echo ""
 read -rp "Enter choice [1]: " STT_CHOICE
 STT_CHOICE="${STT_CHOICE:-1}"
@@ -96,14 +98,19 @@ case "$STT_CHOICE" in
         ok "faster-whisper installed"
         ;;
     2)
+        info "Installing moonshine..."
+        "$PIP" install --quiet useful-moonshine-onnx
+        ok "moonshine installed"
+        ;;
+    3)
         info "Installing vosk..."
         "$PIP" install --quiet vosk
         ok "vosk installed"
         ;;
-    3)
-        info "Installing faster-whisper and vosk..."
-        "$PIP" install --quiet faster-whisper vosk
-        ok "Both engines installed"
+    4)
+        info "Installing faster-whisper, moonshine, and vosk..."
+        "$PIP" install --quiet faster-whisper useful-moonshine-onnx vosk
+        ok "All engines installed"
         ;;
     *)
         warn "Invalid choice, defaulting to faster-whisper"
@@ -111,17 +118,6 @@ case "$STT_CHOICE" in
         ok "faster-whisper installed"
         ;;
 esac
-
-# ── Optional: Voice Activity Detection ──
-echo ""
-read -rp "Install Silero VAD for speech detection? (~2GB, requires torch) [y/N]: " VAD_CHOICE
-if [[ "${VAD_CHOICE,,}" == "y" ]]; then
-    info "Installing silero-vad (this may take a while)..."
-    "$PIP" install --quiet silero-vad
-    ok "silero-vad installed"
-else
-    info "Skipping VAD — you can install later with: $PIP install silero-vad"
-fi
 
 # ── Install verbal-code package ──
 info "Installing verbal-code in editable mode..."
