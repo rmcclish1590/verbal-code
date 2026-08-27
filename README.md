@@ -201,16 +201,31 @@ verbal-code --help               # Show all options
 
 ## Requirements
 
-- Linux Mint (or any X11-based Linux desktop)
+- Linux Mint (or any X11-based Linux desktop; Wayland works with extra setup, see below)
 - Python 3.10+
 - A working microphone
 - `xdotool` (installed automatically by `install.sh`)
 - For GPU acceleration: NVIDIA GPU with CUDA toolkit
 
+### Wayland
+
+On a Wayland session the app switches automatically:
+
+- **Hotkeys** are read straight from the kernel input devices via `evdev`
+  (Wayland compositors don't expose global keyboard events). Your user must be
+  able to read `/dev/input`: `sudo usermod -aG input $USER`, then log out and
+  back in.
+- **Injection** prefers `ydotool`. Install it (`sudo apt install ydotool`) and
+  make sure the `ydotoold` daemon is running; `xdotool`/`xclip` only reach
+  XWayland windows and are kept as a last resort.
+
 ## Troubleshooting
 
 **No text appears after dictation:**
-Check that `xdotool` is installed (`which xdotool`) and that you're on X11, not Wayland. If on Wayland, set `injection.method: "clipboard"` or `"ydotool"` in config.
+On X11, check that `xdotool` is installed (`which xdotool`). On Wayland, install `ydotool` and ensure the `ydotoold` daemon is running — injection prefers it there automatically.
+
+**Hotkey does nothing on Wayland:**
+The evdev listener needs read access to `/dev/input`. Add your user to the `input` group (`sudo usermod -aG input $USER`), log out and back in. The log says which listener is in use at startup.
 
 **"Model not found" error:**
 First run downloads the Whisper model. Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper) or `~/.cache/verbal-code/models/` (Vosk).

@@ -1,10 +1,48 @@
 import logging
+import os
 import threading
 from collections.abc import Callable
 
 from pynput.keyboard import Key, KeyCode, Listener
 
 logger = logging.getLogger("verbal_code")
+
+
+def is_wayland_session() -> bool:
+    """True when running under a Wayland session (where X11 grabs can't work)."""
+    return (
+        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        or bool(os.environ.get("WAYLAND_DISPLAY"))
+    )
+
+
+def create_hotkey_listener(
+    modifiers: list[str],
+    key: str,
+    on_activate: Callable[[], None],
+    on_deactivate: Callable[[], None],
+):
+    """Return the hotkey listener implementation for the current session.
+
+    X11 uses the pynput listener.  Wayland compositors do not expose global
+    keyboard events to X11 clients, so there the evdev listener (which reads
+    /dev/input directly) is used instead — falling back to pynput with a
+    warning when the evdev package is missing.
+    """
+    if is_wayland_session():
+        try:
+            from verbal_code.hotkeys_evdev import EvdevHotkeyListener
+
+            import evdev  # noqa: F401 — fail here, not in the reader thread
+        except ImportError:
+            logger.error(
+                "Wayland session detected but the 'evdev' package is not "
+                "installed (pip install evdev); global hotkeys will most "
+                "likely not work. Falling back to the X11 listener."
+            )
+        else:
+            return EvdevHotkeyListener(modifiers, key, on_activate, on_deactivate)
+    return HotkeyListener(modifiers, key, on_activate, on_deactivate)
 
 _MODIFIER_MAP: dict[str, set[Key]] = {
     "ctrl": {Key.ctrl_l, Key.ctrl_r},
