@@ -103,6 +103,7 @@ _NUMERIC_CONFIG_BOUNDS: list[tuple[tuple[str, ...], str, type | tuple, float, fl
     (("stt", "whisper"), "beam_size", int, 1, 20),
     (("stt", "whisper"), "batch_size", int, 1, 64),
     (("injection",), "delay_ms", int, 0, 1000),
+    (("injection",), "clipboard_threshold", int, 0, 100000),
     (("vad",), "trim_threshold_db", (int, float), -120, 0),
 ]
 

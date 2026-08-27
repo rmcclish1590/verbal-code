@@ -126,13 +126,19 @@ audio); the app refuses to start with another rate. Vosk accepts other rates.
 
 ```yaml
 injection:
-  method: "auto"       # auto|xdotool|clipboard|ydotool
-  delay_ms: 0          # delay between keystrokes, in ms PER CHARACTER
+  method: "auto"           # auto|xdotool|clipboard|ydotool
+  delay_ms: 0              # delay between keystrokes, in ms PER CHARACTER
+  clipboard_threshold: 100 # auto only: paste texts this long instead of typing
 ```
 
 `delay_ms` is the pause between each simulated keystroke, not a one-time delay —
 at 50 a 200-character dictation takes 10 seconds to appear. Leave it at 0 unless
 an application drops characters.
+
+With `method: auto`, short dictations are typed (feels natural, no clipboard
+touch) while dictations of `clipboard_threshold` characters or more are pasted
+via the clipboard, landing instantly regardless of length. Set it to `0` to
+always type; an explicit `method` disables the automatic switch entirely.
 
 ### Voice Activity Detection
 
