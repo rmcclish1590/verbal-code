@@ -74,6 +74,70 @@ class TestValidateConfig:
         validate_config(config)
 
 
+class TestNumericConfigValidation:
+    """Numeric config values are bounds-checked at startup (MCC-8)."""
+
+    @staticmethod
+    def _config(**overrides):
+        config = {
+            "hotkey": {},
+            "stt": {"engine": "whisper", "whisper": {}},
+            "audio": {"sample_rate": 16000},
+            "injection": {},
+            "vad": {},
+        }
+        for dotted, value in overrides.items():
+            section, key = dotted.rsplit("__", 1)
+            target = config
+            for part in section.split("__"):
+                target = target.setdefault(part, {})
+            target[key] = value
+        return config
+
+    def test_valid_config_passes(self):
+        validate_config(
+            self._config(
+                audio__chunk_size=1024,
+                stt__whisper__beam_size=5,
+                stt__whisper__batch_size=8,
+                injection__delay_ms=0,
+                vad__trim_threshold_db=-40.0,
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"audio__sample_rate": "16000"},  # string, not int
+            {"audio__sample_rate": True},  # bool is not a count
+            {"audio__sample_rate": 4000},  # below range
+            {"audio__channels": 0},
+            {"audio__chunk_size": 63},
+            {"audio__chunk_size": 10**9},  # resource exhaustion
+            {"audio__chunk_size": 1024.5},  # float for int field
+            {"stt__whisper__beam_size": 0},
+            {"stt__whisper__beam_size": 100},
+            {"stt__whisper__batch_size": 0},
+            {"injection__delay_ms": -1},
+            {"injection__delay_ms": 5000},
+            {"vad__trim_threshold_db": 3},  # positive dBFS is nonsense
+            {"vad__trim_threshold_db": "loud"},
+        ],
+    )
+    def test_bad_values_exit(self, overrides):
+        with pytest.raises(SystemExit):
+            validate_config(self._config(**overrides))
+
+    def test_missing_values_use_defaults(self):
+        validate_config({"stt": {"engine": "whisper"}, "audio": {}, "hotkey": {}})
+
+    def test_error_names_the_offending_key(self, caplog):
+        with caplog.at_level("ERROR"):
+            with pytest.raises(SystemExit):
+                validate_config(self._config(stt__whisper__beam_size=100))
+        assert "stt.whisper.beam_size" in caplog.text
+
+
 class TestMainValidatesBeforeTestModes:
     """validate_config must run before the diagnostic modes (MCC-6)."""
 
