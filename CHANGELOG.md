@@ -51,6 +51,10 @@ below as MCC-NN).
 
 ### Changed
 
+- Default whisper `beam_size` lowered from 5 to 2 — roughly half the CPU
+  latency with negligible accuracy loss on short dictations; set
+  `stt.whisper.beam_size: 5` to restore the old behaviour (MCC-19).
+
 - The default hotkey is `super+alt+space` everywhere; the code fallback
   previously disagreed with config.yaml and the README (MCC-5).
 - `validate_config()` runs before the `--test-audio` / `--test-transcribe` /

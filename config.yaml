@@ -20,7 +20,9 @@ stt:
     device: "auto"
     compute_type: "int8"
     language: "en"
-    beam_size: 5
+    # 2 is ~2x faster than 5 on CPU with negligible accuracy loss on short
+    # dictations; raise to 5 if you notice misrecognitions on long sentences.
+    beam_size: 2
     # Parallel-decode batch size for BatchedInferencePipeline.
     batch_size: 8
     # Optional vocabulary hint to bias spelling of names/jargon, e.g.
