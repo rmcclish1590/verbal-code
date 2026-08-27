@@ -140,6 +140,12 @@ touch) while dictations of `clipboard_threshold` characters or more are pasted
 via the clipboard, landing instantly regardless of length. Set it to `0` to
 always type; an explicit `method` disables the automatic switch entirely.
 
+`punctuation_commands` (default on) turns spoken commands into punctuation and
+formatting: "period" / "full stop", "comma", "question mark", "exclamation
+mark", "colon", "semicolon", "ellipsis", "new line", and "new paragraph".
+Sentence starts are capitalised automatically — "hello period how are you"
+becomes `Hello. How are you`. Set it to `false` to type such words literally.
+
 ### Voice Activity Detection
 
 ```yaml

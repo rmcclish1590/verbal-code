@@ -12,6 +12,11 @@ below as MCC-NN).
 
 ### Added
 
+- Spoken punctuation and formatting commands ("period", "comma", "question
+  mark", "new line", "new paragraph", ...), with automatic capitalisation of
+  sentence starts; disable with `injection.punctuation_commands: false`
+  (MCC-15).
+
 - Automatic clipboard paste for long dictations (`injection.clipboard_threshold`,
   default 100 characters): short fragments are still typed, long ones land
   instantly via the clipboard (MCC-14).

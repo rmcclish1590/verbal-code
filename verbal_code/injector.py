@@ -1,4 +1,5 @@
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -188,31 +189,88 @@ class HybridInjector(InjectorBase):
         return self._typing.is_available() or self._clipboard.is_available()
 
 
+# Spoken command phrases → replacement text, tried in order (longer phrases
+# first so "new paragraph" wins over "new line" prefix handling). The \s*
+# before each phrase swallows the space the STT engine put in front of it, so
+# punctuation attaches to the preceding word.
+_PUNCTUATION_COMMANDS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\s*\bnew paragraph\b", re.IGNORECASE), "\n\n"),
+    (re.compile(r"\s*\bnew ?line\b", re.IGNORECASE), "\n"),
+    (re.compile(r"\s*\bfull stop\b", re.IGNORECASE), "."),
+    (re.compile(r"\s*\bperiod\b", re.IGNORECASE), "."),
+    (re.compile(r"\s*\bcomma\b", re.IGNORECASE), ","),
+    (re.compile(r"\s*\bquestion mark\b", re.IGNORECASE), "?"),
+    (re.compile(r"\s*\bexclamation (?:mark|point)\b", re.IGNORECASE), "!"),
+    (re.compile(r"\s*\bsemicolon\b", re.IGNORECASE), ";"),
+    (re.compile(r"\s*\bcolon\b", re.IGNORECASE), ":"),
+    (re.compile(r"\s*\bellipsis\b", re.IGNORECASE), "..."),
+]
+
+# Punctuation the STT engine may already have attached to a command word,
+# e.g. Whisper emitting "period." — dropped after substitution. Exactly two
+# repeats collapse; longer runs (an ellipsis) are left alone.
+_DUPLICATE_PUNCTUATION = re.compile(r"(?<![.,!?;:])([.,!?;:])\1(?!\1)")
+_PUNCT_BEFORE_NEWLINE = re.compile(r"[ \t]+(\n)")
+_SPACE_AFTER_NEWLINE = re.compile(r"(\n+)[ \t]+")
+_SENTENCE_START = re.compile(r"([.!?]\s+|\n\s*)([a-z])")
+
+
+def _apply_punctuation_commands(text: str) -> str:
+    for pattern, replacement in _PUNCTUATION_COMMANDS:
+        text = pattern.sub(replacement, text)
+    text = _DUPLICATE_PUNCTUATION.sub(r"\1", text)
+    text = _PUNCT_BEFORE_NEWLINE.sub(r"\1", text)
+    text = _SPACE_AFTER_NEWLINE.sub(r"\1", text)
+    return text
+
+
 class TextProcessor:
     """Applies lightweight post-processing to raw transcription output.
 
-    Capitalises the first word of each dictation session and ensures each
-    segment ends with a trailing space so consecutive injections do not run
-    together.
+    Translates spoken punctuation/formatting commands ("period", "comma",
+    "new line", ...), capitalises sentence starts, and ensures each segment
+    ends with a separator so consecutive injections do not run together.
     """
 
-    def __init__(self) -> None:
-        self._is_start: bool = True
+    def __init__(self, punctuation_commands: bool = True) -> None:
+        self._capitalize_next: bool = True
+        self._commands_enabled = punctuation_commands
 
     def process(self, text: str) -> str:
-        """Return ``text`` with session-start capitalisation and trailing space."""
+        """Return ``text`` with commands applied, capitalisation, and a trailing separator."""
         if not text:
             return text
-        if self._is_start:
-            text = text[0].upper() + text[1:]
-            self._is_start = False
-        if not text.endswith(" "):
+        if self._commands_enabled:
+            text = _apply_punctuation_commands(text)
+        if not text.strip():
+            return text
+
+        if self._capitalize_next:
+            text = self._capitalize_first_letter(text)
+        text = _SENTENCE_START.sub(
+            lambda m: m.group(1) + m.group(2).upper(), text
+        )
+
+        # Carry sentence state across segments: after "…stop." the next
+        # dictation should start capitalised.
+        self._capitalize_next = text.rstrip(" ")[-1] in ".!?\n"
+
+        if not text[-1].isspace():
             text += " "
+        return text
+
+    @staticmethod
+    def _capitalize_first_letter(text: str) -> str:
+        for i, char in enumerate(text):
+            if char.isalpha():
+                return text[:i] + char.upper() + text[i + 1 :]
+            if not char.isspace():
+                break
         return text
 
     def reset(self) -> None:
         """Reset state so the next segment is treated as a new session start."""
-        self._is_start = True
+        self._capitalize_next = True
 
 
 def _build_candidate_list(
