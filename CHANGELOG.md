@@ -87,7 +87,8 @@ below as MCC-NN).
 ### Removed
 
 - The torch/torchaudio dependency (~2 GB): voice-activity detection uses
-  faster-whisper's bundled ONNX Silero VAD.
+  faster-whisper's bundled ONNX Silero VAD, and `install.sh` now uninstalls
+  torch from existing venvs on upgrade (MCC-18).
 - `BACKLOG.md` — the backlog moved to Linear.
 
 ## [0.1.0] - 2026-08-26
