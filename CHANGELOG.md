@@ -12,6 +12,12 @@ below as MCC-NN).
 
 ### Added
 
+- Regression tests prove the selected transcription model survives a
+  restart: the tray quick-switch's save round-trips through `load_config()`
+  exactly like a fresh start would, unrelated config sections are preserved,
+  and a missing config file is created on first switch. The persistence
+  itself already worked (MCC-16); this closes the gap in coverage (MCC-33).
+
 - Every completed dictation logs its hotkey-release→text-on-screen latency as
   `dictation_latency_ms=<value>` at INFO, for performance monitoring
   (MCC-30).
