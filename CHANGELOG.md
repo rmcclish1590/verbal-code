@@ -92,6 +92,11 @@ below as MCC-NN).
 
 ### Fixed
 
+- A malformed saved hotkey in config.yaml (wrong types, unknown modifier
+  names) now falls back to the default combo with a warning instead of
+  breaking startup; saved hotkeys are validated once and used consistently
+  by the listener, ready banner, and hotkey editor (MCC-32).
+
 - Streaming thread lifecycle: stop state is initialised (shutdown previously
   raised `AttributeError`), the per-session thread is joined on dictation stop
   instead of spinning forever, and queued audio is drained on stop so the tail

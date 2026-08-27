@@ -23,6 +23,42 @@ _KNOWN_CONFIG_SECTIONS = {"hotkey", "stt", "audio", "injection", "vad", "tray", 
 DEFAULT_HOTKEY_MODIFIERS = ["super", "alt"]
 DEFAULT_HOTKEY_KEY = "space"
 
+_KNOWN_MODIFIERS = {"ctrl", "alt", "shift", "super", "meta"}
+
+
+def resolve_hotkey_config(config: dict) -> tuple[list[str], str]:
+    """Return the saved (modifiers, key), or the defaults if unusable.
+
+    A hand-edited or out-of-date config must never leave the app without a
+    working hotkey, so anything malformed — modifiers that aren't a list of
+    known modifier names, a key that isn't a non-empty string — falls back to
+    the default combo with a warning instead of breaking startup.
+    """
+    hotkey_cfg = config.get("hotkey", {})
+    modifiers = hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS)
+    key = hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY)
+
+    valid_modifiers = (
+        isinstance(modifiers, list)
+        and len(modifiers) > 0
+        and all(
+            isinstance(m, str) and m.lower() in _KNOWN_MODIFIERS for m in modifiers
+        )
+    )
+    valid_key = isinstance(key, str) and bool(key.strip())
+    if not (valid_modifiers and valid_key):
+        logger.warning(
+            "Saved hotkey config is invalid (modifiers=%r, key=%r); "
+            "falling back to the default %s+%s",
+            modifiers,
+            key,
+            "+".join(DEFAULT_HOTKEY_MODIFIERS),
+            DEFAULT_HOTKEY_KEY,
+        )
+        return list(DEFAULT_HOTKEY_MODIFIERS), DEFAULT_HOTKEY_KEY
+
+    return [m.lower() for m in modifiers], key.strip().lower()
+
 _shutdown = False
 
 
@@ -268,6 +304,9 @@ class VerbalCode:
         audio_cfg = config.get("audio", {})
         hotkey_cfg = config.get("hotkey", {})
         self._hotkey_mode: str = hotkey_cfg.get("mode", "hold")
+        # Saved (or default) combo, validated once; every consumer — listener,
+        # ready banner, hotkey editor — uses these so they can't disagree.
+        self._hotkey_modifiers, self._hotkey_key = resolve_hotkey_config(config)
         stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
         vad_cfg = config.get("vad", {})
@@ -298,8 +337,8 @@ class VerbalCode:
             )
         )
         self.hotkey = create_hotkey_listener(
-            modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
-            key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
+            modifiers=self._hotkey_modifiers,
+            key=self._hotkey_key,
             on_activate=self._on_hotkey_pressed,
             on_deactivate=self._on_hotkey_released,
         )
@@ -352,9 +391,8 @@ class VerbalCode:
             self.tray.start()
         self.hotkey.start()
         logger.info("Starting Verbal Code v%s", __version__)
-        hotkey_cfg = self.config.get("hotkey", {})
-        mods = "+".join(hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS))
-        key = hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY)
+        mods = "+".join(self._hotkey_modifiers)
+        key = self._hotkey_key
         if self._hotkey_mode == "toggle":
             action = f"press {mods}+{key} to start/stop dictation"
         else:
@@ -378,12 +416,11 @@ class VerbalCode:
     def _on_hotkeys_requested(self) -> None:
         from verbal_code.hotkey_editor import HotkeyEditorWindow
 
-        hotkey_cfg = self.config.get("hotkey", {})
         editor = HotkeyEditorWindow(
             gtk=self.tray._gtk,
             gdk=self.tray._gdk,
-            current_modifiers=hotkey_cfg.get("modifiers", DEFAULT_HOTKEY_MODIFIERS),
-            current_key=hotkey_cfg.get("key", DEFAULT_HOTKEY_KEY),
+            current_modifiers=self._hotkey_modifiers,
+            current_key=self._hotkey_key,
             config_path=self._config_path,
             on_save=self._on_hotkey_saved,
             on_recording_start=self.hotkey.stop,
@@ -397,6 +434,7 @@ class VerbalCode:
         self.hotkey.stop()
         self.config.setdefault("hotkey", {})["modifiers"] = modifiers
         self.config["hotkey"]["key"] = key
+        self._hotkey_modifiers, self._hotkey_key = modifiers, key
         self.hotkey = create_hotkey_listener(
             modifiers=modifiers,
             key=key,
