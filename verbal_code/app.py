@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+import tempfile
 import threading
 import time
 
@@ -522,7 +523,10 @@ def _run_test_audio(config: dict) -> None:
     capture.start()
     time.sleep(3)
     audio = capture.stop()
-    out_path = "/tmp/verbal_code_test.wav"
+    # mkstemp creates a fresh file we own — a fixed /tmp name could be a
+    # symlink planted by another user, redirecting the write.
+    fd, out_path = tempfile.mkstemp(prefix="verbal_code_test_", suffix=".wav")
+    os.close(fd)
     AudioCapture.save_wav(out_path, audio, sample_rate=sample_rate)
     print(f"Saved {len(audio) / sample_rate:.2f}s of audio to {out_path}")
 
