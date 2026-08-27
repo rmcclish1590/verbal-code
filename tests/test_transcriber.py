@@ -144,7 +144,12 @@ class TestModelSelectionHelpers:
         assert current_selection({}) == ("whisper", "distil-small.en")
 
     def test_current_selection_per_engine(self):
-        cfg = {"stt": {"engine": "vosk", "vosk": {"model_name": "vosk-model-small-en-us-0.15"}}}
+        cfg = {
+            "stt": {
+                "engine": "vosk",
+                "vosk": {"model_name": "vosk-model-small-en-us-0.15"},
+            }
+        }
         assert current_selection(cfg) == ("vosk", "vosk-model-small-en-us-0.15")
         cfg = {"stt": {"engine": "moonshine", "moonshine": {"model": "moonshine/tiny"}}}
         assert current_selection(cfg) == ("moonshine", "moonshine/tiny")

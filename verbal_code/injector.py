@@ -237,7 +237,8 @@ class TextProcessor:
         self._commands_enabled = punctuation_commands
 
     def process(self, text: str) -> str:
-        """Return ``text`` with commands applied, capitalisation, and a trailing separator."""
+        """Return ``text`` with commands applied, capitalisation, and a trailing
+        separator."""
         if not text:
             return text
         if self._commands_enabled:

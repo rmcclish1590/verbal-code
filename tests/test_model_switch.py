@@ -80,7 +80,8 @@ class TestModelSwitch:
         assert app.tray.model == ("whisper", "small.en")
         assert app.tray.states[-1] == "idle"
 
-        saved = yaml.safe_load(open(app._config_path))
+        with open(app._config_path) as f:
+            saved = yaml.safe_load(f)
         assert saved["stt"]["engine"] == "whisper"
         assert saved["stt"]["whisper"]["model"] == "small.en"
 

@@ -2,7 +2,7 @@ import threading
 
 from pynput.keyboard import Key, KeyCode
 
-from verbal_code.hotkeys import HotkeyListener, _normalize_key, _SPECIAL_KEY_MAP
+from verbal_code.hotkeys import _SPECIAL_KEY_MAP, HotkeyListener, _normalize_key
 
 
 class TestNormalizeKey:

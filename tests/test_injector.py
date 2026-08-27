@@ -38,7 +38,9 @@ class TestBuildCandidateList:
 class TestCreateInjector:
     @patch("verbal_code.injector.shutil.which")
     def test_selects_xdotool_when_available(self, mock_which):
-        mock_which.side_effect = lambda cmd: "/usr/bin/xdotool" if cmd == "xdotool" else None
+        mock_which.side_effect = (
+            lambda cmd: "/usr/bin/xdotool" if cmd == "xdotool" else None
+        )
         injector = create_injector({"injection": {"method": "auto"}})
         assert isinstance(injector, XdotoolInjector)
 
@@ -51,7 +53,9 @@ class TestCreateInjector:
     @patch("verbal_code.injector.shutil.which")
     def test_respects_delay_ms(self, mock_which):
         mock_which.return_value = "/usr/bin/xdotool"
-        injector = create_injector({"injection": {"method": "xdotool", "delay_ms": 100}})
+        injector = create_injector(
+            {"injection": {"method": "xdotool", "delay_ms": 100}}
+        )
         assert isinstance(injector, XdotoolInjector)
         assert injector.typing_delay_ms == 100
 

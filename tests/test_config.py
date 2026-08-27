@@ -1,7 +1,6 @@
+import contextlib
 import logging
-import os
 import sys
-import tempfile
 
 import pytest
 
@@ -40,21 +39,15 @@ class TestLoadConfig:
 class TestValidateConfig:
     def test_warns_on_unknown_sections(self, caplog):
         config = {"hotkey": {}, "stt": {"engine": "whisper"}, "audio": {}, "bogus": {}}
-        with caplog.at_level("WARNING"):
-            try:
-                validate_config(config)
-            except SystemExit:
-                pass
+        with caplog.at_level("WARNING"), contextlib.suppress(SystemExit):
+            validate_config(config)
         assert "Unknown config sections" in caplog.text
         assert "bogus" in caplog.text
 
     def test_warns_on_missing_required_sections(self, caplog):
         config = {"stt": {"engine": "whisper"}}
-        with caplog.at_level("WARNING"):
-            try:
-                validate_config(config)
-            except SystemExit:
-                pass
+        with caplog.at_level("WARNING"), contextlib.suppress(SystemExit):
+            validate_config(config)
         assert "Missing config section" in caplog.text
 
     def test_whisper_rejects_non_16k_sample_rate(self):
@@ -133,9 +126,8 @@ class TestNumericConfigValidation:
         validate_config({"stt": {"engine": "whisper"}, "audio": {}, "hotkey": {}})
 
     def test_error_names_the_offending_key(self, caplog):
-        with caplog.at_level("ERROR"):
-            with pytest.raises(SystemExit):
-                validate_config(self._config(stt__whisper__beam_size=100))
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(self._config(stt__whisper__beam_size=100))
         assert "stt.whisper.beam_size" in caplog.text
 
 
@@ -204,13 +196,17 @@ class TestMainValidatesBeforeTestModes:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
 
-    @pytest.mark.parametrize("flag", ["--test-audio", "--test-transcribe", "--test-inject"])
+    @pytest.mark.parametrize(
+        "flag", ["--test-audio", "--test-transcribe", "--test-inject"]
+    )
     def test_test_modes_run_after_validation(self, monkeypatch, flag):
         runner = "_run" + flag.replace("--", "_").replace("-", "_")
         monkeypatch.setattr("sys.argv", ["verbal-code", flag])
         monkeypatch.setattr(app, "validate_config", lambda config: sys.exit(1))
         monkeypatch.setattr(
-            app, runner, lambda config: pytest.fail(f"{runner} ran before validate_config")
+            app,
+            runner,
+            lambda config: pytest.fail(f"{runner} ran before validate_config"),
         )
         with pytest.raises(SystemExit):
             main()
