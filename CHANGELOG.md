@@ -20,6 +20,12 @@ below as MCC-NN).
 
 ### Fixed
 
+- The clipboard-paste injector no longer clobbers the clipboard: non-text
+  content (images, file copies) and unreadable/empty clipboards skip the
+  restore instead of being replaced with an empty string, and anything the
+  user copies during the paste settle window wins over the restore
+  (MCC-43).
+
 - With `stt.streaming_enabled: true` and an engine whose partials are
   revisable (Whisper/Moonshine), the streaming thread no longer runs at
   all: it re-transcribed the entire session every 1.5s — O(n²) CPU over a
