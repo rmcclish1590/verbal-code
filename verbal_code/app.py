@@ -25,6 +25,7 @@ _KNOWN_CONFIG_SECTIONS = {
     "vad",
     "tray",
     "logging",
+    "dictionary",
 }
 
 # Single source of truth for the default hotkey, matching config.yaml and README.
@@ -162,6 +163,7 @@ _NUMERIC_CONFIG_BOUNDS: list[_BoundSpec] = [
     (("injection",), "delay_ms", int, 0, 1000),
     (("injection",), "clipboard_threshold", int, 0, 100000),
     (("vad",), "trim_threshold_db", (int, float), -120, 0),
+    (("dictionary",), "fuzzy_threshold", (int, float), 0, 1),
 ]
 
 
@@ -320,6 +322,11 @@ class VerbalCode:
         # Deferred imports keep startup fast and avoid circular dependencies
         # at module load time — all subsystems import from each other indirectly.
         from verbal_code.audio import AudioCapture
+        from verbal_code.dictionary import DictionaryStore, default_dictionary_path
+        from verbal_code.dictionary_corrector import (
+            DEFAULT_FUZZY_THRESHOLD,
+            DictionaryCorrector,
+        )
         from verbal_code.hotkeys import create_hotkey_listener
         from verbal_code.injector import TextProcessor, create_injector
         from verbal_code.transcriber import create_transcriber
@@ -372,6 +379,19 @@ class VerbalCode:
             punctuation_commands=config.get("injection", {}).get(
                 "punctuation_commands", True
             )
+        )
+
+        # Corrects known-mangled proper nouns/jargon/acronyms before
+        # injection (MCC-55); reads the persisted term store from MCC-54. An
+        # empty (or absent) dictionary is a no-op, so this changes nothing
+        # for users who haven't added any terms.
+        dictionary_cfg = config.get("dictionary", {})
+        self._dictionary_enabled: bool = dictionary_cfg.get("enabled", True)
+        self.dictionary_corrector = DictionaryCorrector(
+            DictionaryStore(dictionary_cfg.get("path") or default_dictionary_path()),
+            fuzzy_threshold=dictionary_cfg.get(
+                "fuzzy_threshold", DEFAULT_FUZZY_THRESHOLD
+            ),
         )
         self.hotkey = create_hotkey_listener(
             modifiers=self._hotkey_modifiers,
@@ -654,7 +674,8 @@ class VerbalCode:
     def _inject_stream_text(self, text: str) -> None:
         """Inject one finalised stream utterance into the focused window."""
         try:
-            self.injector.inject(self.text_processor.process(text))
+            text = self.text_processor.process(self._apply_dictionary(text))
+            self.injector.inject(text)
         except Exception as exc:
             logger.error("Live injection failed: %s", exc)
 
@@ -718,7 +739,8 @@ class VerbalCode:
             self.tray.set_state(self._TrayState.ERROR)
             return False
         if tail.strip():
-            return self._inject_text(self.text_processor.process(tail))
+            text = self.text_processor.process(self._apply_dictionary(tail))
+            return self._inject_text(text)
         self.tray.set_state(self._TrayState.IDLE)
         return True
 
@@ -789,12 +811,20 @@ class VerbalCode:
             self.tray.set_state(self._TrayState.IDLE)
             return None
 
-        text = self.text_processor.process(raw)
+        text = self.text_processor.process(self._apply_dictionary(raw))
         if self._log_transcripts:
             logger.info("Transcribed: %s", text)
         else:
             logger.info("Transcribed %d chars", len(text))
         return text
+
+    def _apply_dictionary(self, text: str) -> str:
+        """Correct known-mangled terms before punctuation/capitalization
+        post-processing runs. A no-op when the dictionary is empty or
+        disabled (MCC-55)."""
+        if not self._dictionary_enabled:
+            return text
+        return self.dictionary_corrector.correct(text)
 
     def _inject_text(self, text: str) -> bool:
         """Inject ``text`` into the focused window after a brief settle delay.

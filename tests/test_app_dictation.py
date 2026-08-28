@@ -5,11 +5,15 @@ trimming, transcription failure, successful injection, and the live-streaming
 finish path.
 """
 
+import os
+import tempfile
 import threading
 
 import numpy as np
 
 from verbal_code.app import VerbalCode
+from verbal_code.dictionary import DictionaryStore
+from verbal_code.dictionary_corrector import DictionaryCorrector
 from verbal_code.injector import TextProcessor
 
 
@@ -107,6 +111,10 @@ def _make_app(audio, transcriber, live=False):
     app._log_transcripts = False
     app._max_record_seconds = 300.0
     app._max_record_timer = None
+    app._dictionary_enabled = True
+    app.dictionary_corrector = DictionaryCorrector(
+        DictionaryStore(os.path.join(tempfile.mkdtemp(), "dictionary.json"))
+    )
     return app
 
 

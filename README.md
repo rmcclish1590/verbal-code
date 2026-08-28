@@ -162,6 +162,22 @@ recording with no audible speech at all skips transcription entirely. Raise the
 threshold towards `-30` in noisy environments, or lower it towards `-50` if
 quiet speech gets clipped.
 
+### Dictionary
+
+```yaml
+dictionary:
+  enabled: true
+  fuzzy_threshold: 0.82  # 0-1; lower catches more mishearings, higher is stricter
+  path: null             # defaults to ~/.config/verbal-code/dictionary.json
+```
+
+A persisted list of custom terms — names, jargon, acronyms — that corrects
+transcription output before injection. Known misheard variants are replaced
+exactly; anything close enough (via fuzzy matching) is corrected too, so you
+don't have to anticipate every way a term gets mangled. Corrections happen
+before punctuation commands and capitalization. Empty until you add terms
+(no behavior change out of the box).
+
 ### System Tray
 
 ```yaml
