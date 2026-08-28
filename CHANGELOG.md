@@ -70,6 +70,15 @@ below as MCC-NN).
 
 ### Added
 
+- New tray "Dictionary..." window for viewing and managing dictionary
+  entries: search by term or variant, sortable columns, add/edit terms and
+  their variants, toggle enabled/disabled, and delete (with confirmation).
+  Auto-learned entries are marked with a ✨ indicator. There's no review
+  queue for pending auto-learned candidates yet — that depends on MCC-56,
+  which is deliberately deferred, so every entry shown here is already
+  active. Renaming a term isn't supported; the term is the store's
+  identity (MCC-57).
+
 - Dictionary corrections are now applied to transcribed text before
   injection: known misheard variants are replaced with the canonical term
   exactly, and anything close enough (fuzzy-matched, configurable via

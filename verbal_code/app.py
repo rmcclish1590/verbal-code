@@ -387,8 +387,11 @@ class VerbalCode:
         # for users who haven't added any terms.
         dictionary_cfg = config.get("dictionary", {})
         self._dictionary_enabled: bool = dictionary_cfg.get("enabled", True)
+        self.dictionary_store = DictionaryStore(
+            dictionary_cfg.get("path") or default_dictionary_path()
+        )
         self.dictionary_corrector = DictionaryCorrector(
-            DictionaryStore(dictionary_cfg.get("path") or default_dictionary_path()),
+            self.dictionary_store,
             fuzzy_threshold=dictionary_cfg.get(
                 "fuzzy_threshold", DEFAULT_FUZZY_THRESHOLD
             ),
@@ -414,6 +417,7 @@ class VerbalCode:
         self.tray = SystemTray(
             on_quit=self._on_tray_quit,
             on_hotkeys=self._on_hotkeys_requested,
+            on_dictionary=self._on_dictionary_requested,
             notifications=tray_cfg.get("notifications", True),
             on_model_selected=self._on_model_requested,
             model_menu=model_menu,
@@ -508,6 +512,12 @@ class VerbalCode:
         mods_str = "+".join(modifiers)
         logger.info("Hotkey updated to %s+%s", mods_str, key)
         self.tray.notify("Verbal Code", f"Hotkey changed to {mods_str}+{key}")
+
+    def _on_dictionary_requested(self) -> None:
+        from verbal_code.dictionary_editor import DictionaryEditorWindow
+
+        editor = DictionaryEditorWindow(gtk=self.tray._gtk, store=self.dictionary_store)
+        editor.show()
 
     def _on_model_requested(self, engine: str, model: str) -> None:
         """Tray callback: switch models off the GTK thread."""

@@ -95,6 +95,7 @@ class SystemTray:
         self,
         on_quit: Callable[[], None] | None = None,
         on_hotkeys: Callable[[], None] | None = None,
+        on_dictionary: Callable[[], None] | None = None,
         notifications: bool = True,
         on_model_selected: Callable[[str, str], None] | None = None,
         model_menu: list[tuple[str, list[str]]] | None = None,
@@ -102,6 +103,7 @@ class SystemTray:
     ):
         self._on_quit = on_quit
         self._on_hotkeys = on_hotkeys
+        self._on_dictionary = on_dictionary
         self._notifications = notifications
         self._on_model_selected = on_model_selected
         self._model_menu = model_menu or []
@@ -165,6 +167,11 @@ class SystemTray:
         hotkeys_item = self._gtk.MenuItem(label="Hotkeys...")
         hotkeys_item.connect("activate", self._on_hotkeys_clicked)
         menu.append(hotkeys_item)
+
+        if self._on_dictionary:
+            dictionary_item = self._gtk.MenuItem(label="Dictionary...")
+            dictionary_item.connect("activate", self._on_dictionary_clicked)
+            menu.append(dictionary_item)
 
         menu.append(self._gtk.SeparatorMenuItem())
 
@@ -256,6 +263,10 @@ class SystemTray:
     def _on_hotkeys_clicked(self, _widget: Any) -> None:
         if self._on_hotkeys:
             self._on_hotkeys()
+
+    def _on_dictionary_clicked(self, _widget: Any) -> None:
+        if self._on_dictionary:
+            self._on_dictionary()
 
     def _on_quit_clicked(self, _widget: Any) -> None:
         if self._on_quit:
