@@ -14,6 +14,15 @@ _SUBPROCESS_TIMEOUT = 10
 _PASTE_SETTLE_SECONDS = 0.3
 
 
+class InjectionError(RuntimeError):
+    """Raised when an injection attempt fails to deliver the text.
+
+    Injectors must raise (not just log) on failure so the app can surface
+    the error to the user instead of reporting a successful dictation while
+    the text was silently lost.
+    """
+
+
 class InjectorBase(ABC):
     """Abstract base for all text-injection strategies."""
 
@@ -47,10 +56,14 @@ class XdotoolInjector(InjectorBase):
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
-            if result.returncode != 0:
-                logger.error("xdotool failed: %s", result.stderr.strip())
-        except subprocess.TimeoutExpired:
-            logger.error("xdotool timed out after %ds", _SUBPROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            raise InjectionError(
+                f"xdotool timed out after {_SUBPROCESS_TIMEOUT}s"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise InjectionError("xdotool is not installed") from exc
+        if result.returncode != 0:
+            raise InjectionError(f"xdotool failed: {result.stderr.strip()}")
 
     def is_available(self) -> bool:
         """Return True when xdotool is on PATH."""
@@ -67,8 +80,14 @@ class ClipboardInjector(InjectorBase):
     def inject(self, text: str) -> None:
         """Paste ``text`` via xclip + xdotool Ctrl+V."""
         saved_clipboard = self._read_clipboard()
-        if not self._write_and_paste(text):
-            return
+        self._write_clipboard(text)
+        try:
+            self._press_paste()
+        except InjectionError:
+            # The dictation is already on the clipboard; leave it there so
+            # the user can recover it with a manual paste.
+            logger.warning("Paste failed; dictated text left on the clipboard")
+            raise
         time.sleep(_PASTE_SETTLE_SECONDS)
         self._restore_clipboard(saved_clipboard)
 
@@ -83,7 +102,7 @@ class ClipboardInjector(InjectorBase):
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return ""
 
-    def _write_and_paste(self, text: str) -> bool:
+    def _write_clipboard(self, text: str) -> None:
         try:
             # stdout/stderr go to DEVNULL rather than pipes: xclip forks a
             # daemon that inherits them, and reading a pipe to EOF would block
@@ -96,24 +115,31 @@ class ClipboardInjector(InjectorBase):
                 stderr=subprocess.DEVNULL,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
-            if write_result.returncode != 0:
-                logger.error(
-                    "xclip write failed with exit code %d", write_result.returncode
-                )
-                return False
-            subprocess.run(
+        except subprocess.TimeoutExpired as exc:
+            raise InjectionError("xclip write timed out") from exc
+        except FileNotFoundError as exc:
+            raise InjectionError("xclip is not installed") from exc
+        if write_result.returncode != 0:
+            raise InjectionError(
+                f"xclip write failed with exit code {write_result.returncode}"
+            )
+
+    def _press_paste(self) -> None:
+        try:
+            result = subprocess.run(
                 ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
                 capture_output=True,
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
-            return True
-        except subprocess.TimeoutExpired:
-            logger.error("Clipboard injection timed out")
-            return False
+        except subprocess.TimeoutExpired as exc:
+            raise InjectionError("paste keystroke timed out") from exc
         except FileNotFoundError as exc:
-            logger.error("Missing tool for clipboard injection: %s", exc)
-            return False
+            raise InjectionError("xdotool is not installed") from exc
+        if result.returncode != 0:
+            raise InjectionError(
+                f"paste keystroke failed: {result.stderr.strip()}"
+            )
 
     def _restore_clipboard(self, saved: str) -> None:
         try:
@@ -143,10 +169,14 @@ class YdotoolInjector(InjectorBase):
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
-            if result.returncode != 0:
-                logger.error("ydotool failed: %s", result.stderr.strip())
-        except subprocess.TimeoutExpired:
-            logger.error("ydotool timed out after %ds", _SUBPROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            raise InjectionError(
+                f"ydotool timed out after {_SUBPROCESS_TIMEOUT}s"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise InjectionError("ydotool is not installed") from exc
+        if result.returncode != 0:
+            raise InjectionError(f"ydotool failed: {result.stderr.strip()}")
 
     def is_available(self) -> bool:
         """Return True when ydotool is on PATH."""
@@ -180,9 +210,14 @@ class HybridInjector(InjectorBase):
                 len(text),
                 self.threshold,
             )
-            self._clipboard.inject(text)
-        else:
-            self._typing.inject(text)
+            try:
+                self._clipboard.inject(text)
+                return
+            except InjectionError as exc:
+                logger.warning(
+                    "Clipboard paste failed (%s); falling back to typing", exc
+                )
+        self._typing.inject(text)
 
     def is_available(self) -> bool:
         """Available when either underlying strategy is."""
