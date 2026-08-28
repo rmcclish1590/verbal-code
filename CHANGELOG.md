@@ -20,6 +20,12 @@ below as MCC-NN).
 
 ### Fixed
 
+- A dictation started while a tray model switch was still loading no longer
+  gets its transcriber swapped out mid-session: the swap now commits under
+  the dictation lock and is cancelled (with a notification) if recording
+  began during the load, and the in-memory config is only modified when the
+  swap actually commits (MCC-44).
+
 - The clipboard-paste injector no longer clobbers the clipboard: non-text
   content (images, file copies) and unreadable/empty clipboards skip the
   restore instead of being replaced with an empty string, and anything the

@@ -486,6 +486,8 @@ class VerbalCode:
 
     def _switch_model(self, engine: str, model: str) -> None:
         """Load the requested engine/model, swap it in, and persist the choice."""
+        import copy
+
         from verbal_code.transcriber import apply_selection, create_transcriber
 
         if self._recording:
@@ -498,13 +500,35 @@ class VerbalCode:
         try:
             self.tray.set_state(self._TrayState.PROCESSING)
             self.tray.notify("Verbal Code", f"Loading {engine} ({model})...")
-            apply_selection(self.config, engine, model)
-            transcriber = create_transcriber(self.config)
+            # Build the new transcriber from a config copy so self.config only
+            # changes if the swap actually commits below.
+            new_config = copy.deepcopy(self.config)
+            apply_selection(new_config, engine, model)
+            transcriber = create_transcriber(new_config)
             transcriber.load_model()
-            self.transcriber = transcriber
-            self._live_injection = (
-                self._streaming_enabled and transcriber.supports_live_streaming
-            )
+            # Commit under the dictation lock: a dictation started while the
+            # model was loading must finish on the transcriber it began with,
+            # never have the engine swapped out mid-session (MCC-44).
+            with self._dictation_lock:
+                if self._recording:
+                    logger.info(
+                        "Dictation started during model load; switch to "
+                        "%s (%s) cancelled",
+                        engine,
+                        model,
+                    )
+                    self.tray.set_state(self._TrayState.LISTENING)
+                    self.tray.notify(
+                        "Verbal Code",
+                        "Dictation in progress — model switch cancelled, "
+                        "try again",
+                    )
+                    return
+                apply_selection(self.config, engine, model)
+                self.transcriber = transcriber
+                self._live_injection = (
+                    self._streaming_enabled and transcriber.supports_live_streaming
+                )
             self._save_stt_selection(engine, model)
             self.tray.set_model(engine, model)
             self.tray.set_state(self._TrayState.IDLE)

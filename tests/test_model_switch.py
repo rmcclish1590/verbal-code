@@ -29,6 +29,7 @@ class _FakeTrayState:
             self.value = value
 
     IDLE = _S("idle")
+    LISTENING = _S("listening")
     PROCESSING = _S("processing")
     ERROR = _S("error")
 
@@ -56,6 +57,7 @@ def _make_app(tmp_path, fail_load=False, recording=False, monkeypatch=None):
     app._streaming_enabled = False
     app._live_injection = False
     app._model_switch_lock = threading.Lock()
+    app._dictation_lock = threading.Lock()
     app.transcriber = _FakeTranscriber()
     if monkeypatch is not None:
         import verbal_code.transcriber as transcriber_module
@@ -93,6 +95,34 @@ class TestModelSwitch:
         assert app.transcriber is old
         assert app.tray.states[-1] == "error"
         assert app.tray.model is None
+
+    def test_dictation_during_load_cancels_swap(self, tmp_path, monkeypatch):
+        """MCC-44: a dictation started mid-load must keep its transcriber."""
+        import os
+
+        import verbal_code.transcriber as transcriber_module
+
+        app = _make_app(tmp_path)
+        old = app.transcriber
+
+        class _RacingTranscriber(_FakeTranscriber):
+            def load_model(self):
+                app._recording = True  # dictation starts while loading
+                super().load_model()
+
+        monkeypatch.setattr(
+            transcriber_module,
+            "create_transcriber",
+            lambda config: _RacingTranscriber(),
+        )
+        app._switch_model("whisper", "small.en")
+
+        assert app.transcriber is old
+        assert app.config["stt"]["whisper"]["model"] == "distil-small.en"
+        assert not os.path.isfile(app._config_path)  # nothing persisted
+        assert app.tray.model is None
+        assert app.tray.states[-1] == "listening"
+        assert any("cancelled" in n for n in app.tray.notifications)
 
     def test_switch_refused_while_recording(self, tmp_path, monkeypatch):
         app = _make_app(tmp_path, recording=True, monkeypatch=monkeypatch)
