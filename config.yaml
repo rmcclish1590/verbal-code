@@ -10,8 +10,9 @@ stt:
   # Live injection while you speak. With the vosk engine, each utterance is
   # typed into the focused window as it finalises (a pause ends an utterance);
   # nothing further happens on release. Whisper/Moonshine partials are
-  # revisable, so those engines keep injecting in one batch on release.
-  # Costs continuous inference while recording.
+  # revisable, so this setting has no effect there: those engines always
+  # transcribe and inject in one batch on release.
+  # Costs continuous inference while recording (vosk only).
   streaming_enabled: false
   whisper:
     # English-only distil model: near-small accuracy at a lower CPU cost.

@@ -410,9 +410,9 @@ class VerbalCode:
         if self._streaming_enabled and not self._live_injection:
             logger.info(
                 "stt.streaming_enabled is on, but the configured engine only "
-                "produces revisable partial results; text is still injected "
-                "in one batch on hotkey release (use the vosk engine for "
-                "live injection)."
+                "produces revisable partial results, so streaming is skipped "
+                "entirely; text is transcribed and injected in one batch on "
+                "hotkey release (use the vosk engine for live injection)."
             )
 
     def start(self) -> None:
@@ -556,7 +556,12 @@ class VerbalCode:
             self.text_processor.reset()
             self.transcriber.reset()
             self.capture.start()
-            if self._streaming_enabled:
+            # Streaming only runs when its text can be injected live. For
+            # engines with revisable partials (Whisper) it would re-transcribe
+            # the whole session every interval — O(n²) CPU — to produce
+            # nothing but debug logs, so the batch pass on release covers
+            # them instead (MCC-42).
+            if self._live_injection:
                 self._stream_stop.clear()
                 self._stream_thread = threading.Thread(
                     target=self._streaming_loop, daemon=True
