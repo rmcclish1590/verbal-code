@@ -70,6 +70,13 @@ below as MCC-NN).
 
 ### Added
 
+- New tray "Logging..." window showing the hotkey-release-to-injection
+  latency measurements (`dictation_latency_ms=`, MCC-30) recorded in the
+  configured log file — a filtered, read-only view rather than the full
+  application log, with a Refresh button. Shows a placeholder if
+  `logging.file` isn't configured or no entries have been logged yet
+  (MCC-58).
+
 - New tray "Dictionary..." window for viewing and managing dictionary
   entries: search by term or variant, sortable columns, add/edit terms and
   their variants, toggle enabled/disabled, and delete (with confirmation).

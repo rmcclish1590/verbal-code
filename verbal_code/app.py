@@ -418,6 +418,7 @@ class VerbalCode:
             on_quit=self._on_tray_quit,
             on_hotkeys=self._on_hotkeys_requested,
             on_dictionary=self._on_dictionary_requested,
+            on_logging=self._on_logging_requested,
             notifications=tray_cfg.get("notifications", True),
             on_model_selected=self._on_model_requested,
             model_menu=model_menu,
@@ -518,6 +519,15 @@ class VerbalCode:
 
         editor = DictionaryEditorWindow(gtk=self.tray._gtk, store=self.dictionary_store)
         editor.show()
+
+    def _on_logging_requested(self) -> None:
+        from verbal_code.log_viewer import LogViewerWindow
+
+        log_path = self.config.get("logging", {}).get("file")
+        if log_path:
+            log_path = os.path.expanduser(log_path)
+        viewer = LogViewerWindow(gtk=self.tray._gtk, log_path=log_path)
+        viewer.show()
 
     def _on_model_requested(self, engine: str, model: str) -> None:
         """Tray callback: switch models off the GTK thread."""
