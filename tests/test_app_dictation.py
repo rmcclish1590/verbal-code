@@ -39,11 +39,18 @@ class _FakeTray:
 class _FakeCapture:
     def __init__(self, audio):
         self.audio = audio
+        self.started = False
         self.stopped = False
+
+    def start(self):
+        self.started = True
 
     def stop(self):
         self.stopped = True
         return self.audio
+
+    def get_chunk(self, timeout=0.1):
+        return None
 
     def get_all_chunks(self):
         return []
@@ -66,6 +73,9 @@ class _FakeTranscriber:
 
     def stream_finalize(self):
         return self.tail
+
+    def reset(self):
+        return None
 
 
 class _FakeInjector:
@@ -201,6 +211,40 @@ class TestLiveDictationStop:
 
         assert app._stream_thread is None
         assert not thread.is_alive()
+
+
+class TestStreamingThreadGating:
+    """MCC-42: streaming runs only when its text can be injected live.
+
+    For engines with revisable partials the loop would re-transcribe the
+    whole session every interval (O(n²) CPU) just to produce debug logs.
+    """
+
+    def test_no_stream_thread_without_live_injection(self):
+        app = _make_app(_speech(), _FakeTranscriber())
+        app._recording = False
+        app._streaming_enabled = True  # on, but the engine can't inject live
+        app._live_injection = False
+        app._max_record_seconds = 0
+        app._on_dictation_start()
+        try:
+            assert app._stream_thread is None
+            assert app.capture.started
+        finally:
+            app._recording = False
+
+    def test_stream_thread_starts_with_live_injection(self):
+        transcriber = _FakeTranscriber()
+        transcriber.supports_live_streaming = True
+        app = _make_app(_speech(), transcriber, live=True)
+        app._recording = False
+        app._max_record_seconds = 0
+        app._on_dictation_start()
+        try:
+            assert app._stream_thread is not None
+        finally:
+            app._join_stream_thread()
+            app._recording = False
 
 
 class TestMaxRecordingDuration:

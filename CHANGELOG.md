@@ -20,6 +20,13 @@ below as MCC-NN).
 
 ### Fixed
 
+- With `stt.streaming_enabled: true` and an engine whose partials are
+  revisable (Whisper/Moonshine), the streaming thread no longer runs at
+  all: it re-transcribed the entire session every 1.5s — O(n²) CPU over a
+  dictation — only to produce debug-log lines, since the injected text
+  always came from the batch pass on release anyway. Live streaming still
+  works unchanged with the vosk engine (MCC-42).
+
 - Recordings are now capped by `audio.max_seconds` (default 300, 0 to
   disable): a toggle-mode dictation left running no longer grows the
   in-memory audio buffer without bound (~3.8 MB/min). Hitting the cap stops
