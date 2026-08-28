@@ -70,6 +70,14 @@ below as MCC-NN).
 
 ### Added
 
+- New `verbal_code.dictionary` module: a persisted store of user-defined
+  custom terms (names, jargon, acronyms) for correcting transcription
+  output, backed by `~/.config/verbal-code/dictionary.json` with atomic
+  writes. Supports add/update/delete/lookup; matching is case-insensitive
+  and supports multi-word phrases, while the canonical term's casing is
+  preserved on output. Data layer only — applying corrections during
+  transcription and a management UI are tracked separately (MCC-54).
+
 - Regression tests prove the selected transcription model survives a
   restart: the tray quick-switch's save round-trips through `load_config()`
   exactly like a fresh start would, unrelated config sections are preserved,
