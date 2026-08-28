@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.24,<3",
     "evdev>=1.6,<2",
     "pynput>=1.7.6,<2",
+    "ruamel.yaml>=0.18,<0.19",
     "sounddevice>=0.4.6,<0.6",
 ]
 
