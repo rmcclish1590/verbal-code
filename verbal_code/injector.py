@@ -70,16 +70,31 @@ class XdotoolInjector(InjectorBase):
         return shutil.which("xdotool") is not None
 
 
+
+# Clipboard TARGETS that indicate plain-text content xclip can round-trip.
+_TEXT_CLIPBOARD_TARGETS = {
+    "UTF8_STRING",
+    "STRING",
+    "TEXT",
+    "COMPOUND_TEXT",
+    "text/plain",
+    "text/plain;charset=utf-8",
+}
+
+
 class ClipboardInjector(InjectorBase):
     """Injects text by writing to the clipboard then pasting with Ctrl+V.
 
-    The previous clipboard contents are saved and restored so the user's
-    clipboard is not permanently overwritten.
+    Previous plain-text clipboard contents are saved and restored so the
+    user's clipboard is not permanently overwritten.  Non-text content
+    (images, file copies) cannot be round-tripped through xclip, so no
+    restore is attempted for it — the dictated text stays on the clipboard
+    instead of being replaced by an empty string.
     """
 
     def inject(self, text: str) -> None:
         """Paste ``text`` via xclip + xdotool Ctrl+V."""
-        saved_clipboard = self._read_clipboard()
+        saved_clipboard = self._save_clipboard()
         self._write_clipboard(text)
         try:
             self._press_paste()
@@ -89,18 +104,61 @@ class ClipboardInjector(InjectorBase):
             logger.warning("Paste failed; dictated text left on the clipboard")
             raise
         time.sleep(_PASTE_SETTLE_SECONDS)
-        self._restore_clipboard(saved_clipboard)
+        if saved_clipboard is not None:
+            self._restore_clipboard(saved_clipboard, injected=text)
 
-    def _read_clipboard(self) -> str:
+    def _save_clipboard(self) -> str | None:
+        """Return the clipboard text to restore later, or None to skip restore.
+
+        None means the clipboard is empty, unreadable, or holds non-text
+        content — in every such case actively writing a "restored" value
+        would destroy more than it saves.
+        """
+        targets = self._clipboard_targets()
+        if targets is None:
+            return None
+        if not targets & _TEXT_CLIPBOARD_TARGETS:
+            logger.debug(
+                "Clipboard holds non-text content that cannot be restored "
+                "after pasting; the dictated text will remain on the clipboard"
+            )
+            return None
+        return self._read_clipboard()
+
+    def _clipboard_targets(self) -> set[str] | None:
+        """Return the clipboard's advertised TARGETS, or None if unreadable."""
         try:
-            return subprocess.run(
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"],
+                capture_output=True,
+                text=True,
+                timeout=_SUBPROCESS_TIMEOUT,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if result.returncode != 0:  # empty clipboard, or no owner
+            return None
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+    def _read_clipboard(self) -> str | None:
+        """Return the clipboard text, or None when it cannot be read.
+
+        A failed read must be distinguished from an empty clipboard: callers
+        skip the restore on None rather than overwrite the clipboard with an
+        empty string.
+        """
+        try:
+            result = subprocess.run(
                 ["xclip", "-selection", "clipboard", "-o"],
                 capture_output=True,
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT,
-            ).stdout
+            )
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return ""
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout
 
     def _write_clipboard(self, text: str) -> None:
         try:
@@ -141,7 +199,20 @@ class ClipboardInjector(InjectorBase):
                 f"paste keystroke failed: {result.stderr.strip()}"
             )
 
-    def _restore_clipboard(self, saved: str) -> None:
+    def _restore_clipboard(self, saved: str, injected: str) -> None:
+        """Write ``saved`` back, unless the user changed the clipboard meanwhile.
+
+        Anything copied during the paste-settle window must win over the
+        restore; the clipboard is only restored while it still holds the
+        text this injector put there.
+        """
+        current = self._read_clipboard()
+        if current is not None and current != injected:
+            logger.debug(
+                "Clipboard changed during the paste settle window; "
+                "leaving it untouched"
+            )
+            return
         try:
             subprocess.run(
                 ["xclip", "-selection", "clipboard"],
