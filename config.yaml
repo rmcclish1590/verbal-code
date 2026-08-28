@@ -70,6 +70,19 @@ injection:
   # words literally.
   punctuation_commands: true
 
+dictionary:
+  # Corrects known-mangled proper nouns, jargon, and acronyms before
+  # injection, using the term store managed via the tray/CLI (see
+  # `verbal_code.dictionary`). No-op until you add terms.
+  enabled: true
+  # How close a mangled word has to be to a dictionary term (0-1, via
+  # difflib's ratio) before it's corrected. Lower catches more mishearings
+  # but risks correcting words that were already right; raise if you see
+  # false corrections.
+  fuzzy_threshold: 0.82
+  # Defaults to ~/.config/verbal-code/dictionary.json when unset.
+  path: null
+
 tray:
   enabled: true
   notifications: true

@@ -70,6 +70,16 @@ below as MCC-NN).
 
 ### Added
 
+- Dictionary corrections are now applied to transcribed text before
+  injection: known misheard variants are replaced with the canonical term
+  exactly, and anything close enough (fuzzy-matched, configurable via
+  `dictionary.fuzzy_threshold`) is corrected too, so every mishearing
+  doesn't need to be anticipated as a variant up front. Runs for both batch
+  and live-streaming injection paths, before punctuation commands and
+  capitalization; disabled entries are skipped, and an empty dictionary is
+  a no-op. New `dictionary:` config section (`enabled`, `fuzzy_threshold`,
+  `path`) (MCC-55).
+
 - New `verbal_code.dictionary` module: a persisted store of user-defined
   custom terms (names, jargon, acronyms) for correcting transcription
   output, backed by `~/.config/verbal-code/dictionary.json` with atomic
