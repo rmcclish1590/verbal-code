@@ -178,6 +178,10 @@ don't have to anticipate every way a term gets mangled. Corrections happen
 before punctuation commands and capitalization. Empty until you add terms
 (no behavior change out of the box).
 
+Manage entries from the tray menu (**Dictionary...**): search, add, edit,
+enable/disable, and delete terms. Auto-learned entries (none exist yet —
+that's future work) would show a ✨ marker.
+
 ### System Tray
 
 ```yaml
