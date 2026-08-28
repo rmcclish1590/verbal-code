@@ -95,6 +95,8 @@ def _make_app(audio, transcriber, live=False):
     app._trim_silence_enabled = True
     app._trim_threshold_db = -40.0
     app._log_transcripts = False
+    app._max_record_seconds = 300.0
+    app._max_record_timer = None
     return app
 
 
@@ -199,6 +201,43 @@ class TestLiveDictationStop:
 
         assert app._stream_thread is None
         assert not thread.is_alive()
+
+
+class TestMaxRecordingDuration:
+    """MCC-41: a forgotten toggle-mode recording must not grow forever."""
+
+    def test_watchdog_stops_recording_and_transcribes(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="captured anyway"))
+        app._on_max_duration_reached()
+
+        assert app.capture.stopped
+        assert not app._recording
+        assert app.transcriber.batch_calls == 1
+        assert app.injector.injected == ["Captured anyway "]
+        assert any(
+            "Maximum recording length" in n for n in app.tray.notifications
+        )
+
+    def test_watchdog_is_a_noop_when_not_recording(self):
+        app = _make_app(_speech(), _FakeTranscriber())
+        app._recording = False
+        app._on_max_duration_reached()
+
+        assert not app.capture.stopped
+        assert app.transcriber.batch_calls == 0
+        assert app.tray.notifications == []
+
+    def test_normal_stop_cancels_the_watchdog(self):
+        app = _make_app(_speech(), _FakeTranscriber())
+        timer = threading.Timer(3600, lambda: None)
+        timer.daemon = True
+        timer.start()
+        app._max_record_timer = timer
+        app._on_dictation_stop()
+
+        assert app._max_record_timer is None
+        timer.join(timeout=1.0)  # cancelled timer thread exits promptly
+        assert not timer.is_alive()
 
 
 class TestTranscriptLogging:

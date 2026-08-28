@@ -109,6 +109,8 @@ class TestNumericConfigValidation:
             {"audio__chunk_size": 63},
             {"audio__chunk_size": 10**9},  # resource exhaustion
             {"audio__chunk_size": 1024.5},  # float for int field
+            {"audio__max_seconds": -1},
+            {"audio__max_seconds": "forever"},
             {"stt__whisper__beam_size": 0},
             {"stt__whisper__beam_size": 100},
             {"stt__whisper__batch_size": 0},

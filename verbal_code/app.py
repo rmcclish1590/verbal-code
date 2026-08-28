@@ -145,6 +145,7 @@ _NUMERIC_CONFIG_BOUNDS: list[_BoundSpec] = [
     (("audio",), "sample_rate", int, 8000, 192000),
     (("audio",), "channels", int, 1, 8),
     (("audio",), "chunk_size", int, 64, 65536),
+    (("audio",), "max_seconds", (int, float), 0, 86400),
     (("stt", "whisper"), "beam_size", int, 1, 20),
     (("stt", "whisper"), "batch_size", int, 1, 64),
     (("injection",), "delay_ms", int, 0, 1000),
@@ -300,6 +301,9 @@ class VerbalCode:
     """
 
     MIN_AUDIO_SECONDS = 0.3
+    # Recording accumulates float32 audio in memory (~3.8 MB/min); an
+    # unattended toggle-mode session would otherwise grow without bound.
+    DEFAULT_MAX_RECORD_SECONDS = 300.0
 
     def __init__(self, config: dict, config_path: str | None = None):
         # Deferred imports keep startup fast and avoid circular dependencies
@@ -388,6 +392,12 @@ class VerbalCode:
         self._dictation_lock = threading.Lock()
         self._recording = False
         self._record_start: float = 0.0
+        # Watchdog that stops a dictation left recording past
+        # audio.max_seconds (0 disables the cap).
+        self._max_record_seconds: float = audio_cfg.get(
+            "max_seconds", self.DEFAULT_MAX_RECORD_SECONDS
+        )
+        self._max_record_timer: threading.Timer | None = None
 
         self._stream_stop = threading.Event()
         self._stream_thread: threading.Thread | None = None
@@ -552,8 +562,32 @@ class VerbalCode:
                     target=self._streaming_loop, daemon=True
                 )
                 self._stream_thread.start()
+            if self._max_record_seconds > 0:
+                self._max_record_timer = threading.Timer(
+                    self._max_record_seconds, self._on_max_duration_reached
+                )
+                self._max_record_timer.daemon = True
+                self._max_record_timer.start()
             self.tray.set_state(self._TrayState.LISTENING)
             logger.info("Dictation started")
+
+    def _on_max_duration_reached(self) -> None:
+        """Watchdog: stop a dictation that has hit ``audio.max_seconds``.
+
+        Guards against a forgotten toggle-mode session growing the in-memory
+        capture buffer without bound; the audio recorded so far is still
+        transcribed and injected normally.
+        """
+        if not self._recording:
+            return
+        logger.warning(
+            "Recording reached audio.max_seconds (%.0fs); stopping dictation",
+            self._max_record_seconds,
+        )
+        self.tray.notify(
+            "Verbal Code", "Maximum recording length reached — transcribing"
+        )
+        self._on_dictation_stop()
 
     def _streaming_loop(self) -> None:
         while not self._stream_stop.is_set():
@@ -658,6 +692,9 @@ class VerbalCode:
             if not self._recording:
                 return None, 0.0
             self._recording = False
+            if self._max_record_timer is not None:
+                self._max_record_timer.cancel()
+                self._max_record_timer = None
             audio = self.capture.stop()
             sample_rate = self.config.get("audio", {}).get("sample_rate", 16000)
             duration = len(audio) / sample_rate
