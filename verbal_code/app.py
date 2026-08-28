@@ -509,21 +509,16 @@ class VerbalCode:
 
     def _save_stt_selection(self, engine: str, model: str) -> None:
         """Persist the engine/model choice to the config file."""
+        from verbal_code.config_store import update_config
         from verbal_code.transcriber import apply_selection
 
-        path = self._config_path
         try:
-            if os.path.isfile(path):
-                with open(path) as f:
-                    cfg = yaml.safe_load(f) or {}
-            else:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                cfg = {}
-            apply_selection(cfg, engine, model)
-            with open(path, "w") as f:
-                yaml.safe_dump(cfg, f, default_flow_style=False)
-            logger.info("STT selection saved to %s", path)
-        except OSError as exc:
+            update_config(
+                self._config_path,
+                lambda cfg: apply_selection(cfg, engine, model),
+            )
+            logger.info("STT selection saved to %s", self._config_path)
+        except Exception as exc:
             logger.warning("Could not persist model choice: %s", exc)
 
     def _on_hotkey_pressed(self) -> None:

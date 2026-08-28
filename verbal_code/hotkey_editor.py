@@ -1,9 +1,6 @@
 import logging
-import os
 from collections.abc import Callable
 from typing import Any
-
-import yaml
 
 logger = logging.getLogger("verbal_code")
 
@@ -39,22 +36,15 @@ def _format_combo(modifiers: list[str], key: str) -> str:
 def save_hotkey_config(
     config_path: str, modifiers: list[str], key: str
 ) -> None:
-    """Read the YAML config, update the hotkey section, and write it back."""
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    """Update the hotkey section of the config, preserving everything else."""
+    from verbal_code.config_store import update_config
 
-    if os.path.isfile(config_path):
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
-    else:
-        cfg = {}
+    def _set_hotkey(cfg: dict) -> None:
+        cfg.setdefault("hotkey", {})
+        cfg["hotkey"]["modifiers"] = modifiers
+        cfg["hotkey"]["key"] = key
 
-    cfg.setdefault("hotkey", {})
-    cfg["hotkey"]["modifiers"] = modifiers
-    cfg["hotkey"]["key"] = key
-
-    with open(config_path, "w") as f:
-        yaml.safe_dump(cfg, f, default_flow_style=False)
-
+    update_config(config_path, _set_hotkey)
     logger.info("Hotkey config saved to %s", config_path)
 
 

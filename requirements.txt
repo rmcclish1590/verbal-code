@@ -1,6 +1,7 @@
 # Upper bounds cap at the next major version so an incompatible release can't
 # break an install; raise them deliberately after testing.
 PyYAML>=6.0,<7
+ruamel.yaml>=0.18,<0.19  # comment-preserving config rewrites (tray/hotkey saves)
 numpy>=1.24,<3
 sounddevice>=0.4.6,<0.6
 faster-whisper>=1.0.0,<2

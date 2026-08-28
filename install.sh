@@ -96,7 +96,7 @@ read -rp "Enter choice [1]: " STT_CHOICE
 STT_CHOICE="${STT_CHOICE:-1}"
 
 info "Installing core dependencies..."
-"$PIP" install --quiet PyYAML numpy sounddevice pynput evdev
+"$PIP" install --quiet PyYAML "ruamel.yaml" numpy sounddevice pynput evdev
 
 # Older installs pulled in torch (~2 GB) for Silero VAD; faster-whisper's
 # bundled ONNX VAD replaced it, so reclaim the space on upgrade.

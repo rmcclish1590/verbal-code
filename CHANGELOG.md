@@ -20,6 +20,12 @@ below as MCC-NN).
 
 ### Fixed
 
+- Switching models from the tray or saving a hotkey no longer destroys the
+  comments in config.yaml: config rewrites now round-trip through
+  ruamel.yaml (new dependency), are written atomically (temp file +
+  rename, so a crash can't truncate the config), and are serialized behind
+  a lock so concurrent saves can't lose each other's changes (MCC-40).
+
 - A failed injection (xdotool/ydotool/xclip error or timeout) now raises and
   surfaces the error tray state and notification instead of silently
   reporting success while the dictated text was lost. The hybrid injector
