@@ -50,6 +50,15 @@ class TestValidateConfig:
             validate_config(config)
         assert "Missing config section" in caplog.text
 
+    def test_unknown_engine_is_rejected(self, caplog):
+        """MCC-45: a typo'd engine must fail fast, not silently use whisper."""
+        config = {"hotkey": {}, "stt": {"engine": "wisper"}, "audio": {}}
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(config)
+        assert "stt.engine" in caplog.text
+        assert "'whisper', 'vosk', 'moonshine'" in caplog.text
+        assert "wisper" in caplog.text
+
     def test_whisper_rejects_non_16k_sample_rate(self):
         config = {
             "hotkey": {},

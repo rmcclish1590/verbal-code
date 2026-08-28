@@ -33,6 +33,10 @@ DEFAULT_HOTKEY_KEY = "space"
 
 _KNOWN_MODIFIERS = {"ctrl", "alt", "shift", "super", "meta"}
 
+# Engines create_transcriber() can actually build; anything else would
+# silently fall through to the whisper branch there.
+_KNOWN_STT_ENGINES = ("whisper", "vosk", "moonshine")
+
 
 def resolve_hotkey_config(config: dict) -> tuple[list[str], str]:
     """Return the saved (modifiers, key), or the defaults if unusable.
@@ -127,6 +131,13 @@ def validate_config(config: dict) -> None:
             logger.warning("Missing config section '%s', using defaults", section)
 
     engine = config.get("stt", {}).get("engine", "whisper")
+    if engine not in _KNOWN_STT_ENGINES:
+        logger.error(
+            "stt.engine must be one of %s, got %r",
+            ", ".join(f"'{e}'" for e in _KNOWN_STT_ENGINES),
+            engine,
+        )
+        sys.exit(1)
     _assert_stt_engine_available(engine)
     _assert_numeric_values(config)
     _assert_sample_rate_supported(engine, config)

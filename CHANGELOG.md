@@ -20,6 +20,10 @@ below as MCC-NN).
 
 ### Fixed
 
+- An unknown `stt.engine` value (e.g. a typo like "wisper") now fails
+  startup with a clear error listing the valid engines, instead of silently
+  falling back to the Whisper backend (MCC-45).
+
 - A dictation started while a tray model switch was still loading no longer
   gets its transcriber swapped out mid-session: the swap now commits under
   the dictation lock and is cancelled (with a notification) if recording
