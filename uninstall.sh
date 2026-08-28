@@ -23,20 +23,26 @@ for arg in "$@"; do
 done
 
 # ── Check for running instances ──
-if pgrep -f "python.*verbal_code" &>/dev/null; then
+# Match only the launcher's exact interpreter invocation. A broad pattern
+# like "python.*verbal_code" would also kill unrelated processes whose
+# command line merely mentions the repo (an editor's language server, a
+# pytest run, any tool passed a verbal_code path).
+APP_PATTERN="verbal-code/venv/bin/python -m verbal_code"
+
+if pgrep -f "$APP_PATTERN" &>/dev/null; then
     warn "Verbal Code appears to be running."
     if [ "$FORCE" = true ]; then
         info "Stopping running instances..."
-        pkill -f "python.*verbal_code" || true
+        pkill -f "$APP_PATTERN" || true
         sleep 2
-        pkill -9 -f "python.*verbal_code" 2>/dev/null || true
+        pkill -9 -f "$APP_PATTERN" 2>/dev/null || true
         ok "Stopped"
     else
         read -rp "Kill running instances? [y/N] " KILL_CHOICE
         if [[ "${KILL_CHOICE,,}" == "y" ]]; then
-            pkill -f "python.*verbal_code" || true
+            pkill -f "$APP_PATTERN" || true
             sleep 2
-            pkill -9 -f "python.*verbal_code" 2>/dev/null || true
+            pkill -9 -f "$APP_PATTERN" 2>/dev/null || true
             ok "Stopped"
         else
             warn "Continuing with uninstall — running instance may behave unexpectedly"
