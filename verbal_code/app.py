@@ -282,6 +282,12 @@ def setup_logging(config: dict) -> None:
         logger.warning("Cannot open logging.file %r: %s", log_file, exc)
         return
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    # The log file may capture transcript text when transcript logging is
+    # enabled, so keep it readable by the owner only.
+    try:
+        os.chmod(resolved, 0o600)
+    except OSError as exc:
+        logger.warning("Could not restrict permissions on %r: %s", resolved, exc)
     logging.getLogger().addHandler(handler)
 
 
@@ -319,6 +325,13 @@ class VerbalCode:
         stt_cfg = config.get("stt", {})
         tray_cfg = config.get("tray", {})
         vad_cfg = config.get("vad", {})
+
+        # Dictated text can contain anything the user speaks (passwords,
+        # personal details), so transcript content stays out of the logs
+        # unless explicitly opted in; only metadata is logged by default.
+        self._log_transcripts: bool = bool(
+            config.get("logging", {}).get("log_transcripts", False)
+        )
 
         # Energy-based trim of leading/trailing silence before batch
         # transcription. Whisper's built-in vad_filter would cope without it,
@@ -562,7 +575,10 @@ class VerbalCode:
         for text in self.transcriber.transcribe_stream(chunk):  # type: ignore[arg-type]
             if not text:
                 continue
-            logger.debug("[stream] %s", text)
+            if self._log_transcripts:
+                logger.debug("[stream] %s", text)
+            else:
+                logger.debug("[stream] %d chars", len(text))
             if self._live_injection:
                 self._inject_stream_text(text)
 
@@ -702,7 +718,10 @@ class VerbalCode:
             return None
 
         text = self.text_processor.process(raw)
-        logger.info("Transcribed: %s", text)
+        if self._log_transcripts:
+            logger.info("Transcribed: %s", text)
+        else:
+            logger.info("Transcribed %d chars", len(text))
         return text
 
     def _inject_text(self, text: str) -> bool:

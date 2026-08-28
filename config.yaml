@@ -71,3 +71,7 @@ tray:
 logging:
   level: "INFO"
   file: null
+  # Log the transcribed text itself. Off by default: dictation can contain
+  # passwords or personal details, and logs (especially a configured file)
+  # persist in plaintext. When off, only character counts are logged.
+  log_transcripts: false

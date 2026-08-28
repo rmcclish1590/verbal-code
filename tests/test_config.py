@@ -187,6 +187,11 @@ class TestSetupLogging:
         app.setup_logging({})
         assert self._file_handlers() == []
 
+    def test_log_file_is_owner_only(self, tmp_path):
+        log_file = tmp_path / "app.log"
+        app.setup_logging({"logging": {"file": str(log_file)}})
+        assert (log_file.stat().st_mode & 0o777) == 0o600
+
 
 class TestMainValidatesBeforeTestModes:
     """validate_config must run before the diagnostic modes (MCC-6)."""

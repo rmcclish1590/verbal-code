@@ -10,6 +10,14 @@ below as MCC-NN).
 
 ## [Unreleased]
 
+### Security
+
+- Transcribed text is no longer written to the logs by default — dictation
+  can contain passwords or personal details, and logs persist in plaintext.
+  Only character counts are logged now; set `logging.log_transcripts: true`
+  to opt back in to full transcript logging. A configured log file is also
+  restricted to owner-only permissions (0600) (MCC-38).
+
 ### Added
 
 - Regression tests prove the selected transcription model survives a
