@@ -94,6 +94,7 @@ def _make_app(audio, transcriber, live=False):
     app._streaming_enabled = live
     app._trim_silence_enabled = True
     app._trim_threshold_db = -40.0
+    app._log_transcripts = False
     return app
 
 
@@ -198,6 +199,42 @@ class TestLiveDictationStop:
 
         assert app._stream_thread is None
         assert not thread.is_alive()
+
+
+class TestTranscriptLogging:
+    """MCC-38: transcript content must stay out of the logs by default."""
+
+    def test_transcript_text_not_logged_by_default(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber(text="my secret password"))
+        with caplog.at_level("DEBUG", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert not any("secret password" in r.message for r in caplog.records)
+        assert any(
+            r.message == "Transcribed 19 chars" for r in caplog.records
+        )  # "My secret password " after processing
+
+    def test_transcript_text_logged_when_opted_in(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber(text="hello world"))
+        app._log_transcripts = True
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert any("Hello world" in r.message for r in caplog.records)
+
+    def test_stream_text_not_logged_by_default(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber())
+        app.transcriber.transcribe_stream = lambda chunk: iter(["stream secret"])
+        with caplog.at_level("DEBUG", logger="verbal_code"):
+            app._emit_stream_text(np.zeros(160, dtype=np.float32))
+        assert not any("stream secret" in r.message for r in caplog.records)
+        assert any("13 chars" in r.message for r in caplog.records)
+
+    def test_stream_text_logged_when_opted_in(self, caplog):
+        app = _make_app(_speech(), _FakeTranscriber())
+        app._log_transcripts = True
+        app.transcriber.transcribe_stream = lambda chunk: iter(["stream words"])
+        with caplog.at_level("DEBUG", logger="verbal_code"):
+            app._emit_stream_text(np.zeros(160, dtype=np.float32))
+        assert any("stream words" in r.message for r in caplog.records)
 
 
 class TestDictationLatencyLogging:
