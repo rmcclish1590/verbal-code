@@ -20,6 +20,12 @@ below as MCC-NN).
 
 ### Fixed
 
+- Recordings are now capped by `audio.max_seconds` (default 300, 0 to
+  disable): a toggle-mode dictation left running no longer grows the
+  in-memory audio buffer without bound (~3.8 MB/min). Hitting the cap stops
+  the recording with a notification and transcribes what was captured
+  (MCC-41).
+
 - Switching models from the tray or saving a hotkey no longer destroys the
   comments in config.yaml: config rewrites now round-trip through
   ruamel.yaml (new dependency), are written atomically (temp file +

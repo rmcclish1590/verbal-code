@@ -39,6 +39,11 @@ audio:
   channels: 1
   chunk_size: 1024
   device: null
+  # Longest single recording, in seconds. Audio is buffered in memory
+  # (~3.8 MB/min), so a toggle-mode dictation left running would otherwise
+  # grow without bound; hitting the cap stops the recording and transcribes
+  # what was captured. 0 disables the cap.
+  max_seconds: 300
 
 vad:
   # Trim leading/trailing silence from the recording before batch
