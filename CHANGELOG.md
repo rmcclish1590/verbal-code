@@ -20,6 +20,12 @@ below as MCC-NN).
 
 ### Fixed
 
+- uninstall.sh now matches only the launcher's exact interpreter invocation
+  (`verbal-code/venv/bin/python -m verbal_code`) when stopping running
+  instances, instead of the broad `python.*verbal_code` pattern that could
+  kill unrelated processes — an editor's language server, a pytest run, or
+  any tool whose command line mentioned the repo (MCC-46).
+
 - An unknown `stt.engine` value (e.g. a typo like "wisper") now fails
   startup with a clear error listing the valid engines, instead of silently
   falling back to the Whisper backend (MCC-45).
