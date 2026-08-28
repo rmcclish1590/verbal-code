@@ -18,6 +18,15 @@ below as MCC-NN).
   to opt back in to full transcript logging. A configured log file is also
   restricted to owner-only permissions (0600) (MCC-38).
 
+### Fixed
+
+- A failed injection (xdotool/ydotool/xclip error or timeout) now raises and
+  surfaces the error tray state and notification instead of silently
+  reporting success while the dictated text was lost. The hybrid injector
+  falls back to typing when a clipboard paste fails, and a paste-keystroke
+  failure leaves the dictated text on the clipboard so it can be recovered
+  with a manual paste (MCC-39).
+
 ### Added
 
 - Regression tests prove the selected transcription model survives a

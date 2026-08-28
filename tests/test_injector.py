@@ -1,8 +1,12 @@
-from unittest.mock import patch
+import subprocess
+from unittest.mock import Mock, patch
+
+import pytest
 
 from verbal_code.injector import (
     ClipboardInjector,
     HybridInjector,
+    InjectionError,
     XdotoolInjector,
     YdotoolInjector,
     _build_candidate_list,
@@ -87,15 +91,98 @@ class TestWaylandAutoOrder:
 
 
 class _SpyInjector:
-    def __init__(self, available=True):
+    def __init__(self, available=True, fail=False):
         self.available = available
+        self.fail = fail
         self.injected: list[str] = []
 
     def inject(self, text):
+        if self.fail:
+            raise InjectionError("spy failure")
         self.injected.append(text)
 
     def is_available(self):
         return self.available
+
+
+def _completed(returncode=0, stderr=""):
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout="", stderr=stderr
+    )
+
+
+class TestInjectionFailuresRaise:
+    """MCC-39: a failed injection must raise, never silently succeed."""
+
+    @patch("verbal_code.injector.subprocess.run")
+    def test_xdotool_nonzero_exit_raises(self, mock_run):
+        mock_run.return_value = _completed(returncode=1, stderr="no display")
+        with pytest.raises(InjectionError, match="no display"):
+            XdotoolInjector().inject("hello")
+
+    @patch("verbal_code.injector.subprocess.run")
+    def test_xdotool_timeout_raises(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="xdotool", timeout=10)
+        with pytest.raises(InjectionError, match="timed out"):
+            XdotoolInjector().inject("hello")
+
+    @patch("verbal_code.injector.subprocess.run")
+    def test_ydotool_nonzero_exit_raises(self, mock_run):
+        mock_run.return_value = _completed(returncode=1, stderr="no uinput")
+        with pytest.raises(InjectionError, match="no uinput"):
+            YdotoolInjector().inject("hello")
+
+    @patch("verbal_code.injector.subprocess.run")
+    def test_ydotool_missing_binary_raises(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("ydotool")
+        with pytest.raises(InjectionError, match="not installed"):
+            YdotoolInjector().inject("hello")
+
+    @patch("verbal_code.injector.subprocess.run")
+    def test_clipboard_write_failure_raises(self, mock_run):
+        mock_run.side_effect = [
+            _completed(),  # read of existing clipboard
+            _completed(returncode=1),  # xclip write fails
+        ]
+        with pytest.raises(InjectionError, match="xclip write failed"):
+            ClipboardInjector().inject("hello")
+
+    @patch("verbal_code.injector.time.sleep")
+    @patch("verbal_code.injector.subprocess.run")
+    def test_clipboard_paste_failure_skips_restore_and_raises(
+        self, mock_run, _sleep
+    ):
+        mock_run.side_effect = [
+            _completed(),  # read of existing clipboard
+            _completed(),  # xclip write succeeds
+            _completed(returncode=1, stderr="keystroke lost"),  # paste fails
+        ]
+        with pytest.raises(InjectionError, match="paste keystroke failed"):
+            ClipboardInjector().inject("hello")
+        # No fourth call: the clipboard is NOT restored, so the dictated
+        # text stays recoverable via manual paste.
+        assert mock_run.call_count == 3
+
+    @patch("verbal_code.injector.time.sleep")
+    @patch("verbal_code.injector.subprocess.run")
+    def test_clipboard_success_restores_clipboard(self, mock_run, _sleep):
+        read = Mock()
+        read.stdout = "previous"
+        mock_run.side_effect = [
+            read,  # read of existing clipboard
+            _completed(),  # xclip write
+            _completed(),  # paste keystroke
+            _completed(),  # restore write
+        ]
+        ClipboardInjector().inject("hello")
+        assert mock_run.call_count == 4
+
+    def test_hybrid_falls_back_to_typing_when_paste_raises(self):
+        typing = _SpyInjector()
+        clipboard = _SpyInjector(fail=True)
+        long_text = "x" * 500
+        HybridInjector(typing, clipboard, threshold=100).inject(long_text)
+        assert typing.injected == [long_text]
 
 
 class TestHybridInjector:
