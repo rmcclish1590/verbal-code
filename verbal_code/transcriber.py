@@ -23,6 +23,12 @@ _MOONSHINE_MIN_SECONDS = 0.1
 # longer recordings are cut at quiet points into windows of at most this.
 _PARAKEET_CHUNK_SECONDS = 25
 _PARAKEET_MIN_SECONDS = 0.1
+# Silence appended before input_finished() so the transducer emits the
+# trailing tokens still inside its lookahead window when the stream ends.
+# Measured on the Kroko Zipformer: 0.6s (sherpa's usual example value)
+# dropped the last words of an utterance that followed a mid-stream endpoint
+# reset; 1.5s was the shortest padding that never did.
+_SHERPA_TAIL_PADDING_SECONDS = 1.5
 _PCM_MAX_AMPLITUDE = 32767
 _PCM_MIN_AMPLITUDE = -32768
 _SYSFS_CPU_ROOT = "/sys/devices/system/cpu"
@@ -543,6 +549,154 @@ class ParakeetTranscriber(TranscriberBase):
         """Drop the onnxruntime sessions so their memory can be reclaimed."""
         with self._lock:
             self._model = None
+        gc.collect()
+
+
+class SherpaOnnxTranscriber(TranscriberBase):
+    """True live-streaming transducer STT via sherpa-onnx.
+
+    Runs streaming Zipformer / Nemotron transducers.  Endpoint detection ends
+    an utterance after a pause; the text is then final and the stream is
+    reset, so every yielded utterance is new text the engine will never
+    revise (no duplicated prefixes) and is safe to inject live.  Models are
+    downloaded on first use and checksum-verified (see
+    :mod:`verbal_code.sherpa_models`).
+    """
+
+    supports_live_streaming = True
+
+    def __init__(
+        self,
+        model_name: str = "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+        cpu_threads: int | None = None,
+        sample_rate: int = _DEFAULT_SAMPLE_RATE,
+        cache_dir: str | None = None,
+    ):
+        self.model_name = model_name
+        self.cpu_threads = cpu_threads or physical_core_count()
+        # Capture rate of the audio we're fed; sherpa-onnx resamples it to
+        # the model's 16 kHz feature rate internally.
+        self.sample_rate = sample_rate
+        self.cache_dir = cache_dir
+        self._recognizer: Any = None
+        self._stream: Any = None
+        self._lock = threading.Lock()
+
+    def load_model(self) -> None:
+        """Download (if needed) and load the transducer, then open a stream."""
+        import sherpa_onnx
+
+        from verbal_code.sherpa_models import (
+            DEFAULT_SHERPA_CACHE_DIR,
+            ensure_sherpa_model_downloaded,
+            resolve_transducer_files,
+        )
+
+        logger.info(
+            "Loading sherpa-onnx model '%s' (threads=%d)...",
+            self.model_name,
+            self.cpu_threads,
+        )
+        t0 = time.monotonic()
+        model_dir = ensure_sherpa_model_downloaded(
+            self.model_name, self.cache_dir or DEFAULT_SHERPA_CACHE_DIR
+        )
+        encoder, decoder, joiner, tokens = resolve_transducer_files(model_dir)
+        recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=tokens,
+            encoder=encoder,
+            decoder=decoder,
+            joiner=joiner,
+            num_threads=self.cpu_threads,
+            sample_rate=_DEFAULT_SAMPLE_RATE,
+            feature_dim=80,
+            enable_endpoint_detection=True,
+            # An utterance ends after 2.4s of silence with nothing decoded,
+            # 1.2s of silence after speech, or at 20s regardless.
+            rule1_min_trailing_silence=2.4,
+            rule2_min_trailing_silence=1.2,
+            rule3_min_utterance_length=20.0,
+            decoding_method="greedy_search",
+            provider="cpu",
+        )
+        with self._lock:
+            self._recognizer = recognizer
+            self._stream = recognizer.create_stream()
+        logger.info("sherpa-onnx model loaded in %.2fs", time.monotonic() - t0)
+
+    def _decode_ready(self, stream: Any) -> None:
+        """Decode every frame the stream has buffered (caller holds the lock)."""
+        while self._recognizer.is_ready(stream):
+            self._recognizer.decode_stream(stream)
+
+    def _finish(self, stream: Any) -> str:
+        """Pad, close, and fully decode ``stream``; return its text (caller
+        holds the lock)."""
+        tail = np.zeros(
+            int(_SHERPA_TAIL_PADDING_SECONDS * self.sample_rate), dtype=np.float32
+        )
+        stream.accept_waveform(self.sample_rate, tail)
+        stream.input_finished()
+        self._decode_ready(stream)
+        text: str = self._recognizer.get_result(stream).strip()
+        return text
+
+    def transcribe_stream(self, chunk: np.ndarray) -> Generator[str, None, None]:
+        """Feed ``chunk``; yield an utterance each time an endpoint is detected."""
+        if self._recognizer is None:
+            self.load_model()
+
+        samples = np.asarray(chunk, dtype=np.float32)
+        text = ""
+        with self._lock:
+            self._stream.accept_waveform(self.sample_rate, samples)
+            self._decode_ready(self._stream)
+            if self._recognizer.is_endpoint(self._stream):
+                text = self._recognizer.get_result(self._stream).strip()
+                # Start the next utterance from scratch so its text never
+                # repeats what was just yielded.
+                self._recognizer.reset(self._stream)
+        if text:
+            yield text
+
+    def stream_finalize(self) -> str:
+        """Flush the utterance still open when the stream ended."""
+        if self._recognizer is None:
+            return ""
+        with self._lock:
+            text = self._finish(self._stream)
+            # input_finished() is one-way, so the next recording needs a
+            # fresh stream rather than a reset of this one.
+            self._stream = self._recognizer.create_stream()
+        return text
+
+    def transcribe_batch(self, audio: np.ndarray) -> str:
+        """Decode a complete recording on a fresh one-shot stream."""
+        if self._recognizer is None:
+            self.load_model()
+
+        audio = np.asarray(audio, dtype=np.float32)
+        duration = len(audio) / self.sample_rate
+        logger.info("Transcribing %.2fs of audio (sherpa-onnx)...", duration)
+        t0 = time.monotonic()
+        with self._lock:
+            stream = self._recognizer.create_stream()
+            stream.accept_waveform(self.sample_rate, audio)
+            text = self._finish(stream)
+        logger.info("sherpa-onnx transcription done in %.2fs", time.monotonic() - t0)
+        return text
+
+    def reset(self) -> None:
+        """Open a fresh stream so a new dictation never inherits buffered audio."""
+        with self._lock:
+            if self._recognizer is not None:
+                self._stream = self._recognizer.create_stream()
+
+    def unload_model(self) -> None:
+        """Drop the recognizer and stream so their memory can be reclaimed."""
+        with self._lock:
+            self._stream = None
+            self._recognizer = None
         gc.collect()
 
 
