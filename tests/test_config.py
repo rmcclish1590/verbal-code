@@ -56,7 +56,7 @@ class TestValidateConfig:
         with caplog.at_level("ERROR"), pytest.raises(SystemExit):
             validate_config(config)
         assert "stt.engine" in caplog.text
-        assert "'whisper', 'vosk', 'moonshine'" in caplog.text
+        assert "'whisper', 'parakeet', 'sherpa', 'moonshine', 'vosk'" in caplog.text
         assert "wisper" in caplog.text
 
     def test_whisper_rejects_non_16k_sample_rate(self):
@@ -67,6 +67,44 @@ class TestValidateConfig:
         }
         with pytest.raises(SystemExit):
             validate_config(config)
+
+    @pytest.mark.parametrize("engine", ["parakeet", "sherpa"])
+    def test_new_engines_are_accepted(self, engine):
+        validate_config({"hotkey": {}, "stt": {"engine": engine}, "audio": {}})
+
+    def test_missing_engine_package_names_the_pip_package(self, caplog, monkeypatch):
+        import importlib
+
+        real_import = importlib.import_module
+
+        def fake_import(name, *args, **kwargs):
+            if name == "sherpa_onnx":
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib, "import_module", fake_import)
+        config = {"hotkey": {}, "stt": {"engine": "sherpa"}, "audio": {}}
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(config)
+        assert "pip install sherpa-onnx" in caplog.text
+
+    def test_parakeet_accepts_resampled_capture_rates(self):
+        config = {
+            "hotkey": {},
+            "stt": {"engine": "parakeet"},
+            "audio": {"sample_rate": 48000},
+        }
+        validate_config(config)
+
+    def test_parakeet_rejects_unsupported_sample_rate(self, caplog):
+        config = {
+            "hotkey": {},
+            "stt": {"engine": "parakeet"},
+            "audio": {"sample_rate": 96000},
+        }
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(config)
+        assert "parakeet" in caplog.text
 
     def test_whisper_accepts_16k_sample_rate(self):
         config = {

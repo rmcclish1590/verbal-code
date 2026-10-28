@@ -36,7 +36,19 @@ _KNOWN_MODIFIERS = {"ctrl", "alt", "shift", "super", "meta"}
 
 # Engines create_transcriber() can actually build; anything else would
 # silently fall through to the whisper branch there.
-_KNOWN_STT_ENGINES = ("whisper", "vosk", "moonshine")
+_KNOWN_STT_ENGINES = ("whisper", "parakeet", "sherpa", "moonshine", "vosk")
+
+# engine -> (importable module, pip package to suggest when it's missing)
+_STT_ENGINE_PACKAGES: dict[str, tuple[str, str]] = {
+    "whisper": ("faster_whisper", "faster-whisper"),
+    "parakeet": ("onnx_asr", "onnx-asr[cpu,hub]"),
+    "sherpa": ("sherpa_onnx", "sherpa-onnx"),
+    "moonshine": ("moonshine_onnx", "useful-moonshine-onnx"),
+    "vosk": ("vosk", "vosk"),
+}
+
+# Input rates onnx-asr resamples from for Parakeet (onnx_asr.utils.SampleRates).
+_PARAKEET_SAMPLE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
 
 
 def resolve_hotkey_config(config: dict) -> tuple[list[str], str]:
@@ -200,44 +212,36 @@ def _assert_sample_rate_supported(engine: str, config: dict) -> None:
     if engine == "whisper" and sample_rate != 16000:
         logger.error(
             "audio.sample_rate is %d, but the whisper engine requires 16000. "
-            "Set audio.sample_rate: 16000 (or switch to the vosk engine).",
+            "Set audio.sample_rate: 16000 (or switch to the parakeet engine).",
             sample_rate,
+        )
+        sys.exit(1)
+    if engine == "parakeet" and sample_rate not in _PARAKEET_SAMPLE_RATES:
+        logger.error(
+            "audio.sample_rate is %d, but the parakeet engine only accepts %s. "
+            "Set audio.sample_rate: 16000.",
+            sample_rate,
+            ", ".join(str(r) for r in _PARAKEET_SAMPLE_RATES),
         )
         sys.exit(1)
 
 
 def _assert_stt_engine_available(engine: str) -> None:
     """Exit with a helpful message if the required STT package is not installed."""
-    if engine == "whisper":
-        try:
-            import faster_whisper  # noqa: F401
-        except ImportError:
-            logger.error(
-                "faster-whisper is not installed. Install it with:\n"
-                "  pip install faster-whisper\n"
-                "Or run ./install.sh to set up everything."
-            )
-            sys.exit(1)
-    elif engine == "vosk":
-        try:
-            import vosk  # noqa: F401
-        except ImportError:
-            logger.error(
-                "vosk is not installed. Install it with:\n"
-                "  pip install vosk\n"
-                "Or run ./install.sh to set up everything."
-            )
-            sys.exit(1)
-    elif engine == "moonshine":
-        try:
-            import moonshine_onnx  # noqa: F401
-        except ImportError:
-            logger.error(
-                "moonshine is not installed. Install it with:\n"
-                "  pip install useful-moonshine-onnx\n"
-                "Or run ./install.sh to set up everything."
-            )
-            sys.exit(1)
+    import importlib
+
+    module, pip_name = _STT_ENGINE_PACKAGES[engine]
+    try:
+        importlib.import_module(module)
+    except ImportError:
+        logger.error(
+            "%s is not installed. Install it with:\n"
+            "  pip install %s\n"
+            "Or run ./install.sh to set up everything.",
+            pip_name,
+            pip_name,
+        )
+        sys.exit(1)
 
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -361,8 +365,8 @@ class VerbalCode:
         self._trim_silence_enabled: bool = vad_cfg.get("trim_silence", True)
         self._trim_threshold_db: float = vad_cfg.get("trim_threshold_db", -40.0)
 
-        # With the vosk engine, streaming injects each utterance live as it
-        # finalises. Off by default: batch transcription on hotkey release
+        # With the sherpa or vosk engine, streaming injects each utterance
+        # live as it finalises. Off by default: batch transcription on hotkey release
         # covers normal dictation without the per-interval inference cost
         # while recording.
         self._streaming_enabled: bool = stt_cfg.get("streaming_enabled", False)
@@ -448,7 +452,8 @@ class VerbalCode:
                 "stt.streaming_enabled is on, but the configured engine only "
                 "produces revisable partial results, so streaming is skipped "
                 "entirely; text is transcribed and injected in one batch on "
-                "hotkey release (use the vosk engine for live injection)."
+                "hotkey release (use the sherpa or vosk engine for live "
+                "injection)."
             )
 
     def start(self) -> None:

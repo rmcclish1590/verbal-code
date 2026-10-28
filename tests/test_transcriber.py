@@ -7,10 +7,12 @@ import pytest
 from verbal_code.transcriber import (
     AVAILABLE_MODELS,
     ParakeetTranscriber,
+    SherpaOnnxTranscriber,
     TranscriberBase,
     VoskTranscriber,
     WhisperTranscriber,
     apply_selection,
+    create_transcriber,
     current_selection,
     installed_engines,
     physical_core_count,
@@ -176,12 +178,58 @@ class TestModelSelectionHelpers:
         assert cfg["stt"]["whisper"]["beam_size"] == 3
         assert cfg["stt"]["whisper"]["model"] == "base.en"
 
-    def test_installed_engines_includes_whisper_in_dev_env(self):
-        assert "whisper" in installed_engines()
+    def test_installed_engines_includes_core_engines_in_dev_env(self):
+        # onnx-asr and sherpa-onnx are core dependencies (MCC-118).
+        for engine in ("whisper", "parakeet", "sherpa"):
+            assert engine in installed_engines()
 
     def test_available_models_cover_installed_engines(self):
-        for engine in ("whisper", "moonshine", "vosk"):
+        for engine in installed_engines():
             assert AVAILABLE_MODELS[engine]
+
+    @pytest.mark.parametrize("engine", ["parakeet", "sherpa"])
+    def test_new_engines_round_trip(self, engine):
+        for model in AVAILABLE_MODELS[engine]:
+            cfg: dict = {}
+            apply_selection(cfg, engine, model)
+            assert current_selection(cfg) == (engine, model)
+            assert cfg["stt"][engine]["model"] == model
+
+    @pytest.mark.parametrize("engine", list(AVAILABLE_MODELS))
+    def test_default_model_is_first_listed(self, engine):
+        cfg = {"stt": {"engine": engine}}
+        assert current_selection(cfg) == (engine, AVAILABLE_MODELS[engine][0])
+
+
+class TestCreateTranscriber:
+    def test_parakeet_is_batch_only(self):
+        t = create_transcriber(
+            {"stt": {"engine": "parakeet", "parakeet": {"quantization": ""}}}
+        )
+        assert isinstance(t, ParakeetTranscriber)
+        assert t.supports_live_streaming is False
+        assert t.model_name == "nemo-parakeet-tdt-0.6b-v2"
+        assert t.quantization is None
+
+    def test_sherpa_streams_live(self):
+        model = AVAILABLE_MODELS["sherpa"][1]
+        t = create_transcriber(
+            {
+                "stt": {"engine": "sherpa", "sherpa": {"model": model}},
+                "audio": {"sample_rate": 48000},
+            }
+        )
+        assert isinstance(t, SherpaOnnxTranscriber)
+        assert t.supports_live_streaming is True
+        assert t.model_name == model
+        assert t.sample_rate == 48000
+
+    def test_existing_engines_unchanged(self):
+        t = create_transcriber({"stt": {"engine": "vosk"}})
+        assert isinstance(t, VoskTranscriber) and t.supports_live_streaming
+        t = create_transcriber({"stt": {"whisper": {"model": "small.en"}}})
+        assert isinstance(t, WhisperTranscriber)
+        assert t.model_size == "small.en" and not t.supports_live_streaming
 
 
 class TestWhisperStreamDelta:
