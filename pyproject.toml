@@ -9,6 +9,11 @@ requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0,<7",
     "faster-whisper>=1.0.0,<2",
+    # Parakeet TDT (INT8, batch) via onnxruntime; "hub" pulls models from
+    # Hugging Face on first use.
+    "onnx-asr[cpu,hub]>=0.12,<0.13",
+    # True live-streaming transducers (Zipformer / Nemotron).
+    "sherpa-onnx>=2.0,<3",
     "numpy>=1.24,<3",
     "evdev>=1.6,<2",
     "pynput>=1.7.6,<2",

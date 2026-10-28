@@ -86,6 +86,7 @@ PYTHON="$VENV_DIR/bin/python"
 
 # ── STT engine selection ──
 echo ""
+info "Parakeet (onnx-asr) and sherpa-onnx engines are always installed."
 info "Choose STT engine(s) to install:"
 echo "  1) faster-whisper (recommended, ~200MB, GPU/CPU)"
 echo "  2) moonshine (fast English-only, CPU/onnxruntime, no torch)"
