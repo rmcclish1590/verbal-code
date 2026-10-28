@@ -26,11 +26,13 @@ class _FakeStream:
         self.samples = 0
         self.finished = False
         self.text = ""
+        self.sample_rates: set[int] = set()
 
     def accept_waveform(self, sample_rate, samples):
         assert samples.dtype == np.float32
         assert not self.finished, "audio fed to a finished stream"
         self.samples += len(samples)
+        self.sample_rates.add(sample_rate)
 
     def input_finished(self):
         self.finished = True
@@ -143,6 +145,23 @@ class TestSherpaTranscriber:
         assert live.finished
         assert live.samples > len(_CHUNK)  # tail padding was appended
         assert t._stream is not live and not t._stream.finished
+
+    def test_capture_rate_is_passed_for_resampling(self, fake_sherpa, model_dir):
+        # sherpa-onnx resamples from the rate it is told; the recognizer's
+        # own feature rate stays 16 kHz.
+        t = _loaded(model_dir, sample_rate=48000)
+        list(t.transcribe_stream(_CHUNK))
+        t.stream_finalize()
+        t.transcribe_batch(np.zeros(4800, dtype=np.float32))
+
+        assert fake_sherpa.calls[0]["sample_rate"] == 16000
+        fed = [s for s in fake_sherpa.recognizer.streams if s.samples]
+        assert fed and all(s.sample_rates == {48000} for s in fed)
+
+    def test_transcribe_stream_loads_lazily(self, fake_sherpa, model_dir):
+        t = SherpaOnnxTranscriber(cpu_threads=1, cache_dir=str(model_dir.parent))
+        list(t.transcribe_stream(_CHUNK))
+        assert len(fake_sherpa.calls) == 1
 
     def test_stream_finalize_before_load_is_empty(self):
         assert SherpaOnnxTranscriber(cpu_threads=1).stream_finalize() == ""
