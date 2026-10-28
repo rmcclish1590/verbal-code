@@ -172,6 +172,12 @@ below as MCC-NN).
 
 ### Changed
 
+- Whisper now runs one CTranslate2 thread per physical CPU core (6 on a
+  Ryzen 5 5600G) instead of CTranslate2's default of 4: about 11-13% lower
+  latency across distil-small.en, distil-medium.en, and distil-large-v3.5 on
+  that CPU. `distil-medium.en` and `distil-large-v3.5` were added to the
+  tray's Whisper models (MCC-122).
+
 - New core dependencies `onnx-asr[cpu,hub]` (NVIDIA Parakeet TDT models on
   onnxruntime, which faster-whisper already pulls in) and `sherpa-onnx`
   (true live-streaming transducers), groundwork for the Parakeet and
