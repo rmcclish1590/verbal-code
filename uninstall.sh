@@ -14,13 +14,39 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_DIR="$HOME/.config/verbal-code"
 FORCE=false
+PURGE=false
 
 for arg in "$@"; do
     case "$arg" in
         -f|--force) FORCE=true ;;
+        --purge) PURGE=true ;;
     esac
 done
+
+# ── Locate the dictionary (kept unless --purge, MCC-128) ──
+# User-curated terms take time to build, so a reinstall should find them.
+# A custom dictionary.path in config.yaml wins; read it before the config
+# is removed. Uses the system python3 (the venv may already be gone).
+DICT_PATH="$CONFIG_DIR/dictionary.json"
+CUSTOM_DICT=$(python3 - "$CONFIG_DIR/config.yaml" 2>/dev/null <<'PY' || true
+import os, sys, yaml
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f) or {}
+path = (cfg.get("dictionary") or {}).get("path")
+if path:
+    print(os.path.expanduser(str(path)))
+PY
+)
+if [ -n "$CUSTOM_DICT" ]; then
+    DICT_PATH="$CUSTOM_DICT"
+fi
+DICT_DISPLAY="${DICT_PATH/#$HOME/\~}"
+KEEP_DICT=false
+if [ "$PURGE" != true ] && [ -f "$DICT_PATH" ]; then
+    KEEP_DICT=true
+fi
 
 # ── Check for running instances ──
 # Match only the launcher's exact interpreter invocation. A broad pattern
@@ -53,7 +79,14 @@ fi
 # ── Confirmation ──
 if [ "$FORCE" != true ]; then
     echo ""
-    warn "This will remove Verbal Code and all its data."
+    if [ "$PURGE" = true ]; then
+        warn "This will remove Verbal Code and all its data, including your dictionary."
+    elif [ "$KEEP_DICT" = true ]; then
+        warn "This will remove Verbal Code and its data."
+        info "Your dictionary ($DICT_DISPLAY) will be kept; use --purge to remove it too."
+    else
+        warn "This will remove Verbal Code and all its data."
+    fi
     read -rp "Continue? [y/N] " CONFIRM
     if [[ "${CONFIRM,,}" != "y" ]]; then
         info "Aborted."
@@ -104,13 +137,26 @@ else
     SKIPPED+=("venv (not found)")
 fi
 
-# ── Remove config ──
-if [ -d "$HOME/.config/verbal-code" ]; then
-    rm -rf "$HOME/.config/verbal-code"
-    ok "Removed config: ~/.config/verbal-code/"
+# ── Remove config (everything but a kept dictionary) ──
+if [ -d "$CONFIG_DIR" ]; then
+    if [ "$KEEP_DICT" = true ] && [[ "$DICT_PATH" == "$CONFIG_DIR"/* ]]; then
+        find "$CONFIG_DIR" -mindepth 1 ! -type d ! -path "$DICT_PATH" -delete
+        find "$CONFIG_DIR" -mindepth 1 -type d -empty -delete
+        ok "Removed config: ~/.config/verbal-code/ (dictionary kept)"
+    else
+        rm -rf "$CONFIG_DIR"
+        ok "Removed config: ~/.config/verbal-code/"
+    fi
     REMOVED+=("config")
 else
     SKIPPED+=("config (not found)")
+fi
+
+# A custom dictionary.path can live outside the config directory.
+if [ "$PURGE" = true ] && [ -f "$DICT_PATH" ]; then
+    rm -f "$DICT_PATH"
+    ok "Removed dictionary: $DICT_DISPLAY"
+    REMOVED+=("dictionary")
 fi
 
 # ── Remove cache (sherpa-onnx and vosk models, icons) ──
@@ -184,6 +230,11 @@ if [ ${#REMOVED[@]} -gt 0 ]; then
 fi
 if [ ${#SKIPPED[@]} -gt 0 ]; then
     info "Skipped: ${SKIPPED[*]}"
+fi
+if [ "$KEEP_DICT" = true ]; then
+    echo ""
+    ok "Kept your dictionary: $DICT_DISPLAY"
+    info "Reinstalling picks it up automatically. To delete it too: ./uninstall.sh --purge"
 fi
 echo ""
 info "System packages (xdotool, xclip, python3-gi, etc.) were NOT removed."

@@ -190,6 +190,12 @@ below as MCC-NN).
 
 ### Changed
 
+- uninstall.sh now keeps your custom dictionary (`dictionary.json`, or the
+  file named by `dictionary.path`) so a reinstall picks it up — curated terms
+  take time to build. Everything else is still removed; the output says where
+  the dictionary was kept. Pass `--purge` to delete the dictionary as well.
+  install.sh reports when it finds an existing dictionary (MCC-128).
+
 - install.sh's engine menu now offers only the optional extras (moonshine,
   vosk; default none), since parakeet, sherpa and whisper are always
   installed. Everything installs through the package and its extras, so the

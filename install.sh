@@ -134,6 +134,10 @@ if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
 else
     ok "Config file already exists at $CONFIG_DIR/config.yaml"
 fi
+# uninstall.sh keeps the dictionary (MCC-128); a reinstall reuses it as-is.
+if [ -f "$CONFIG_DIR/dictionary.json" ]; then
+    ok "Existing dictionary found at $CONFIG_DIR/dictionary.json; it will be used"
+fi
 
 # ── Launcher script ──
 info "Creating launcher at $LAUNCHER"
