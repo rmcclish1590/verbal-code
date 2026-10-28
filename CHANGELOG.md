@@ -20,6 +20,13 @@ below as MCC-NN).
 
 ### Fixed
 
+- Switching models from the tray now unloads the previous model as soon as
+  the new one is in place, instead of leaving its memory to the garbage
+  collector; a failed or cancelled switch unloads whatever it had loaded.
+  A switch that finishes loading while a dictation is still being
+  transcribed is now cancelled too (previously only while recording),
+  since the old model is unloaded once the switch commits (MCC-125).
+
 - uninstall.sh now matches only the launcher's exact interpreter invocation
   (`verbal-code/venv/bin/python -m verbal_code`) when stopping running
   instances, instead of the broad `python.*verbal_code` pattern that could

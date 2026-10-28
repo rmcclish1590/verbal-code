@@ -267,6 +267,14 @@ class WhisperTranscriber(TranscriberBase):
         self._last_transcribed_samples = 0
         self._last_stream_text = ""
 
+    def unload_model(self) -> None:
+        """Drop the CTranslate2 model so its memory can be reclaimed."""
+        with self._lock:
+            self._batched = None
+            self._model = None
+        self.reset()
+        gc.collect()
+
 
 class VoskTranscriber(TranscriberBase):
     """Vosk-backed transcriber.  Lightweight; works offline without a GPU.
@@ -377,6 +385,13 @@ class VoskTranscriber(TranscriberBase):
         if self._model is not None:
             self._new_recognizer()
 
+    def unload_model(self) -> None:
+        """Drop the Kaldi model and recognizer so their memory can be reclaimed."""
+        with self._lock:
+            self._recognizer = None
+            self._model = None
+        gc.collect()
+
 
 class MoonshineTranscriber(TranscriberBase):
     """Moonshine (ONNX) backend — fast English-only ASR tuned for short audio.
@@ -455,6 +470,13 @@ class MoonshineTranscriber(TranscriberBase):
     def reset(self) -> None:
         """No persistent per-session state; retained for interface compatibility."""
         return
+
+    def unload_model(self) -> None:
+        """Drop the ONNX sessions and tokenizer so their memory can be reclaimed."""
+        with self._lock:
+            self._model = None
+            self._tokenizer = None
+        gc.collect()
 
 
 class ParakeetTranscriber(TranscriberBase):

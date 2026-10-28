@@ -46,6 +46,9 @@ class _FakeTranscriber:
             raise RuntimeError("model download failed")
         self.loaded = True
 
+    def unload_model(self):
+        self.loaded = False
+
 
 def _make_app(tmp_path, fail_load=False, recording=False, monkeypatch=None):
     app = object.__new__(VerbalCode)
@@ -54,6 +57,7 @@ def _make_app(tmp_path, fail_load=False, recording=False, monkeypatch=None):
     app.tray = _FakeTray()
     app._TrayState = _FakeTrayState
     app._recording = recording
+    app._processing = False
     app._streaming_enabled = False
     app._live_injection = False
     app._model_switch_lock = threading.Lock()
