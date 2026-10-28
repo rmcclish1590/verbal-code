@@ -113,7 +113,7 @@ else
     SKIPPED+=("config (not found)")
 fi
 
-# ── Remove cache (models, icons) ──
+# ── Remove cache (sherpa-onnx and vosk models, icons) ──
 if [ -d "$HOME/.cache/verbal-code" ]; then
     rm -rf "$HOME/.cache/verbal-code"
     ok "Removed cache: ~/.cache/verbal-code/"
@@ -133,8 +133,14 @@ else
 fi
 
 # ── Whisper / Moonshine / Parakeet models (separate prompt) ──
+# One glob per Hugging Face org the engines download from: faster-whisper's
+# model table spans Systran (plain and distil), distil-whisper and
+# mobiuslabsgmbh (large-v3-turbo).
 HF_MODELS=(
     "$HOME"/.cache/huggingface/hub/models--Systran--faster-whisper-*
+    "$HOME"/.cache/huggingface/hub/models--Systran--faster-distil-whisper-*
+    "$HOME"/.cache/huggingface/hub/models--distil-whisper--distil-*-ct2
+    "$HOME"/.cache/huggingface/hub/models--mobiuslabsgmbh--faster-whisper-*
     "$HOME"/.cache/huggingface/hub/models--UsefulSensors--moonshine*
     "$HOME"/.cache/huggingface/hub/models--istupakov--parakeet-*
 )
@@ -181,7 +187,8 @@ if [ ${#SKIPPED[@]} -gt 0 ]; then
 fi
 echo ""
 info "System packages (xdotool, xclip, python3-gi, etc.) were NOT removed."
-info "To remove them manually: sudo apt remove xdotool xclip gir1.2-appindicator3-0.1 libnotify-bin"
+info "To remove them manually: sudo apt remove xdotool xclip libnotify-bin gir1.2-ayatanaappindicator3-0.1"
+info "(older releases use gir1.2-appindicator3-0.1 instead of the ayatana package)"
 echo ""
 info "Source code remains at $SCRIPT_DIR"
 info "Delete manually if desired: rm -rf $SCRIPT_DIR"
