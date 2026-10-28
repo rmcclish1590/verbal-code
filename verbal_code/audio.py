@@ -47,6 +47,43 @@ def trim_silence(
     return audio[start:end]
 
 
+def split_at_quiet_points(
+    audio: np.ndarray,
+    sample_rate: int,
+    max_seconds: float,
+    search_seconds: float = 5.0,
+    frame_ms: int = 30,
+) -> list[np.ndarray]:
+    """Split ``audio`` into pieces no longer than ``max_seconds``.
+
+    Each cut lands in the quietest ``frame_ms`` frame within the last
+    ``search_seconds`` of the allowed window, so it falls in a pause between
+    words rather than through one — a fixed-stride split clips whichever word
+    straddles the boundary.  Audio that already fits is returned as one piece.
+    """
+    max_len = max(1, int(max_seconds * sample_rate))
+    frame_len = max(1, int(sample_rate * frame_ms / 1000))
+    search_len = min(max_len, int(search_seconds * sample_rate))
+
+    pieces: list[np.ndarray] = []
+    start = 0
+    while len(audio) - start > max_len:
+        window_start = start + max_len - search_len
+        n_frames = search_len // frame_len
+        if n_frames == 0:
+            cut = start + max_len
+        else:
+            window = audio[window_start : window_start + n_frames * frame_len]
+            frames = window.reshape(n_frames, frame_len).astype(np.float64)
+            rms = np.sqrt(np.mean(frames**2, axis=1))
+            quietest = int(np.argmin(rms))
+            cut = max(start + 1, window_start + quietest * frame_len + frame_len // 2)
+        pieces.append(audio[start:cut])
+        start = cut
+    pieces.append(audio[start:])
+    return pieces
+
+
 class AudioCapture:
     """Captures audio from a sounddevice input stream into a single buffer.
 

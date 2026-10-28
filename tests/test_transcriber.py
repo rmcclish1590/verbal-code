@@ -1,13 +1,19 @@
+import sys
+import types
+
 import numpy as np
+import pytest
 
 from verbal_code.transcriber import (
     AVAILABLE_MODELS,
+    ParakeetTranscriber,
     TranscriberBase,
     VoskTranscriber,
     WhisperTranscriber,
     apply_selection,
     current_selection,
     installed_engines,
+    physical_core_count,
 )
 
 
@@ -138,6 +144,9 @@ class TestTranscriberBaseStreamingDefaults:
         assert t.stream_finalize() == ""
         assert TranscriberBase.supports_live_streaming is False
 
+    def test_default_unload_is_a_no_op(self):
+        self._Minimal().unload_model()
+
 
 class TestModelSelectionHelpers:
     def test_current_selection_defaults(self):
@@ -191,3 +200,112 @@ class TestWhisperStreamDelta:
     def test_first_delta_is_entire_text(self):
         t = _make_transcriber()
         assert t._extract_delta("hello") == "hello"
+
+
+def _write_topology(root, cpu: int, package: int, core: int) -> None:
+    topo = root / f"cpu{cpu}" / "topology"
+    topo.mkdir(parents=True)
+    (topo / "physical_package_id").write_text(f"{package}\n")
+    (topo / "core_id").write_text(f"{core}\n")
+
+
+class TestPhysicalCoreCount:
+    def test_counts_smt_siblings_once(self, tmp_path):
+        # 6 cores x 2 threads, like the Ryzen 5 5600G.
+        for cpu in range(12):
+            _write_topology(tmp_path, cpu, package=0, core=cpu % 6)
+        assert physical_core_count(str(tmp_path)) == 6
+
+    def test_falls_back_to_cpu_count_without_topology(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 3)
+        assert physical_core_count(str(tmp_path)) == 3
+
+
+class _FakeParakeetModel:
+    def __init__(self, text="Hello world."):
+        self.text = text
+        self.calls: list[int] = []  # sample count of each recognize() call
+
+    def recognize(self, waveform, sample_rate=16000):
+        assert waveform.dtype == np.float32
+        assert sample_rate == 16000
+        self.calls.append(len(waveform))
+        return self.text
+
+
+@pytest.fixture
+def fake_onnx_asr(monkeypatch):
+    """Stand-in onnx_asr module recording load_model() arguments."""
+    module = types.SimpleNamespace(loads=[], model=_FakeParakeetModel())
+
+    def load_model(name, **kwargs):
+        module.loads.append((name, kwargs))
+        return module.model
+
+    module.load_model = load_model
+    monkeypatch.setitem(sys.modules, "onnx_asr", module)
+    return module
+
+
+class TestParakeetTranscriber:
+    def test_is_batch_only(self):
+        assert ParakeetTranscriber.supports_live_streaming is False
+
+    def test_load_model_configures_int8_cpu_threads(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=6)
+        t.load_model()
+
+        name, kwargs = fake_onnx_asr.loads[0]
+        assert name == "nemo-parakeet-tdt-0.6b-v2"
+        assert kwargs["quantization"] == "int8"
+        assert kwargs["providers"] == ["CPUExecutionProvider"]
+        assert kwargs["sess_options"].intra_op_num_threads == 6
+        assert kwargs["sess_options"].inter_op_num_threads == 1
+
+    def test_empty_quantization_loads_float_model(self, fake_onnx_asr):
+        ParakeetTranscriber(quantization="", cpu_threads=2).load_model()
+        assert fake_onnx_asr.loads[0][1]["quantization"] is None
+
+    def test_cpu_threads_defaults_to_physical_cores(self, monkeypatch):
+        monkeypatch.setattr(
+            "verbal_code.transcriber.physical_core_count", lambda: 6
+        )
+        assert ParakeetTranscriber().cpu_threads == 6
+
+    def test_empty_audio_returns_empty_without_inference(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=2)
+        t.load_model()
+        warmup_calls = len(fake_onnx_asr.model.calls)
+        assert t.transcribe_batch(np.array([], dtype=np.float32)) == ""
+        assert len(fake_onnx_asr.model.calls) == warmup_calls
+
+    def test_short_clip_is_one_call(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=2)
+        t.load_model()
+        fake_onnx_asr.model.calls.clear()
+        assert t.transcribe_batch(np.zeros(5 * 16000, dtype=np.float32)) == (
+            "Hello world."
+        )
+        assert fake_onnx_asr.model.calls == [5 * 16000]
+
+    def test_long_clip_is_chunked_and_joined(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=2)
+        t.load_model()
+        fake_onnx_asr.model.calls.clear()
+        text = t.transcribe_batch(np.zeros(60 * 16000, dtype=np.float32))
+
+        assert len(fake_onnx_asr.model.calls) == 3
+        assert all(n <= 25 * 16000 for n in fake_onnx_asr.model.calls)
+        assert sum(fake_onnx_asr.model.calls) == 60 * 16000
+        assert text == "Hello world. Hello world. Hello world."
+
+    def test_transcribe_loads_lazily(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=2)
+        t.transcribe_batch(np.zeros(16000, dtype=np.float32))
+        assert len(fake_onnx_asr.loads) == 1
+
+    def test_unload_releases_model(self, fake_onnx_asr):
+        t = ParakeetTranscriber(cpu_threads=2)
+        t.load_model()
+        t.unload_model()
+        assert t._model is None
