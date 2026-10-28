@@ -310,6 +310,14 @@ def setup_logging(config: dict) -> None:
     logging.getLogger().addHandler(handler)
 
 
+def _unload_quietly(transcriber: object) -> None:
+    """Release a transcriber's model; a failure here must not fail a switch."""
+    try:
+        transcriber.unload_model()  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — best-effort memory release
+        logger.warning("Could not unload transcriber: %s", exc)
+
+
 class VerbalCode:
     """Top-level application object that wires together all subsystems.
 
@@ -432,6 +440,9 @@ class VerbalCode:
         self._model_switch_lock = threading.Lock()
         self._dictation_lock = threading.Lock()
         self._recording = False
+        # True from hotkey release until the dictation's text is injected:
+        # the transcriber is still in use even though recording has stopped.
+        self._processing = False
         self._record_start: float = 0.0
         # Watchdog that stops a dictation left recording past
         # audio.max_seconds (0 disables the cap).
@@ -562,30 +573,47 @@ class VerbalCode:
             new_config = copy.deepcopy(self.config)
             apply_selection(new_config, engine, model)
             transcriber = create_transcriber(new_config)
-            transcriber.load_model()
+            try:
+                transcriber.load_model()
+            except Exception:
+                _unload_quietly(transcriber)  # free whatever loaded before failing
+                raise
             # Commit under the dictation lock: a dictation started while the
             # model was loading must finish on the transcriber it began with,
-            # never have the engine swapped out mid-session (MCC-44).
+            # never have the engine swapped out mid-session (MCC-44). That
+            # includes transcribing after release, since the old model is
+            # unloaded once the swap commits (MCC-125).
             with self._dictation_lock:
-                if self._recording:
-                    logger.info(
-                        "Dictation started during model load; switch to "
-                        "%s (%s) cancelled",
-                        engine,
-                        model,
+                busy = self._recording or self._processing
+                if not busy:
+                    previous = self.transcriber
+                    apply_selection(self.config, engine, model)
+                    self.transcriber = transcriber
+                    self._live_injection = (
+                        self._streaming_enabled
+                        and transcriber.supports_live_streaming
                     )
-                    self.tray.set_state(self._TrayState.LISTENING)
-                    self.tray.notify(
-                        "Verbal Code",
-                        "Dictation in progress — model switch cancelled, "
-                        "try again",
-                    )
-                    return
-                apply_selection(self.config, engine, model)
-                self.transcriber = transcriber
-                self._live_injection = (
-                    self._streaming_enabled and transcriber.supports_live_streaming
+            if busy:
+                logger.info(
+                    "Dictation in progress during model load; switch to "
+                    "%s (%s) cancelled",
+                    engine,
+                    model,
                 )
+                _unload_quietly(transcriber)
+                self.tray.set_state(
+                    self._TrayState.LISTENING
+                    if self._recording
+                    else self._TrayState.PROCESSING
+                )
+                self.tray.notify(
+                    "Verbal Code",
+                    "Dictation in progress — model switch cancelled, try again",
+                )
+                return
+            # The outgoing model stayed loaded until now as the fallback for
+            # a failed or cancelled switch; nothing can be using it anymore.
+            _unload_quietly(previous)
             self._save_stt_selection(engine, model)
             self.tray.set_model(engine, model)
             self.tray.set_state(self._TrayState.IDLE)
@@ -713,7 +741,16 @@ class VerbalCode:
         audio, duration = self._stop_recording()
         if audio is None:
             return
+        try:
+            self._process_dictation(audio, duration, released_at)
+        finally:
+            with self._dictation_lock:
+                self._processing = False
 
+    def _process_dictation(
+        self, audio: object, duration: float, released_at: float
+    ) -> None:
+        """Transcribe and inject a stopped recording (batch or live tail)."""
         self._join_stream_thread()
 
         if self._live_injection:
@@ -780,6 +817,7 @@ class VerbalCode:
             if not self._recording:
                 return None, 0.0
             self._recording = False
+            self._processing = True
             if self._max_record_timer is not None:
                 self._max_record_timer.cancel()
                 self._max_record_timer = None

@@ -101,6 +101,7 @@ def _make_app(audio, transcriber, live=False):
     app._TrayState = _TrayState
     app._dictation_lock = threading.Lock()
     app._recording = True
+    app._processing = False
     app._record_start = 0.0
     app._stream_thread = None
     app._stream_stop = threading.Event()

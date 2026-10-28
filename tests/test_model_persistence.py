@@ -58,6 +58,9 @@ class _FakeTranscriber:
     def load_model(self):
         pass
 
+    def unload_model(self):
+        pass
+
 
 def _make_app(config_path, config):
     app = object.__new__(VerbalCode)
@@ -66,6 +69,7 @@ def _make_app(config_path, config):
     app.tray = _FakeTray()
     app._TrayState = _FakeTrayState
     app._recording = False
+    app._processing = False
     app._streaming_enabled = False
     app._live_injection = False
     app._model_switch_lock = threading.Lock()
