@@ -224,6 +224,18 @@ class TestCreateTranscriber:
         assert t.model_name == model
         assert t.sample_rate == 48000
 
+    @pytest.mark.parametrize("engine", ["parakeet", "sherpa", "whisper"])
+    def test_cpu_threads_reaches_engine(self, engine):
+        t = create_transcriber({"stt": {"engine": engine, "cpu_threads": 3}})
+        assert t.cpu_threads == 3
+
+    @pytest.mark.parametrize("engine", ["parakeet", "sherpa", "whisper"])
+    def test_cpu_threads_unset_uses_physical_cores(self, engine, monkeypatch):
+        monkeypatch.setattr(
+            "verbal_code.transcriber.physical_core_count", lambda: 6
+        )
+        assert create_transcriber({"stt": {"engine": engine}}).cpu_threads == 6
+
     def test_existing_engines_unchanged(self):
         t = create_transcriber({"stt": {"engine": "vosk"}})
         assert isinstance(t, VoskTranscriber) and t.supports_live_streaming

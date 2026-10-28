@@ -170,6 +170,7 @@ _NUMERIC_CONFIG_BOUNDS: list[_BoundSpec] = [
     (("audio",), "channels", int, 1, 8),
     (("audio",), "chunk_size", int, 64, 65536),
     (("audio",), "max_seconds", (int, float), 0, 86400),
+    (("stt",), "cpu_threads", int, 1, 256),
     (("stt", "whisper"), "beam_size", int, 1, 20),
     (("stt", "whisper"), "batch_size", int, 1, 64),
     (("injection",), "delay_ms", int, 0, 1000),

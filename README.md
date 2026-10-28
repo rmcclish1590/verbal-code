@@ -59,8 +59,9 @@ Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special k
 
 ```yaml
 stt:
-  engine: "whisper"    # or "parakeet", "sherpa", "moonshine", "vosk"
+  engine: "parakeet"   # or "sherpa", "whisper", "moonshine", "vosk"
   streaming_enabled: false  # live injection while recording (see below)
+  cpu_threads: 6       # optional; default = one per physical CPU core
   whisper:
     model: "distil-small.en" # see table below
     device: "auto"           # auto|cpu|cuda
@@ -91,8 +92,9 @@ default: streaming costs continuous inference during recording.
 
 **Whisper models** (accuracy vs speed):
 
-- **whisper** (default) — batched single-pass on release; widest model choice.
-- **parakeet** — NVIDIA Parakeet TDT (INT8, onnxruntime): faster and more
+- **whisper** — batched single-pass on release; widest model choice. Used when
+  `stt.engine` is unset.
+- **parakeet** (template default) — NVIDIA Parakeet TDT (INT8, onnxruntime): faster and more
   accurate than Whisper's distil models on CPU, with punctuation and
   capitalisation. Batch on release; recordings over 25s are split at pauses.
   Downloads from Hugging Face on first use (~660 MB).
@@ -105,11 +107,34 @@ default: streaming costs continuous inference during recording.
   accuracy, `tiny` is faster. Install with `pip install useful-moonshine-onnx`.
 - **vosk** — lightweight streaming recognizer; lowest resource use, lower accuracy.
 
-Transcription runs as a single batched pass on hotkey release via faster-whisper's
+With whisper, transcription runs as a single batched pass on release via faster-whisper's
 `BatchedInferencePipeline`, which segments the audio with Silero VAD and decodes
 segments in parallel — several times faster than a sequential pass on multi-segment
 audio. `condition_on_previous_text` is disabled to avoid repetition/hallucination
 loops on short dictations.
+
+**Recommended presets.** The template config ships the push-to-talk preset:
+
+```yaml
+# Push-to-talk: text arrives in one batch on hotkey release.
+stt:
+  engine: "parakeet"
+  streaming_enabled: false
+  parakeet:
+    model: "nemo-parakeet-tdt-0.6b-v2"
+```
+
+```yaml
+# Live streaming: each utterance is typed as soon as you pause.
+stt:
+  engine: "sherpa"
+  streaming_enabled: true
+  sherpa:
+    model: "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+```
+
+`stt.cpu_threads` (1–256) sets the inference threads for parakeet, sherpa, and
+whisper; leave it unset to use one thread per physical CPU core.
 
 **Whisper models** (accuracy vs speed). For English the `.en` / `distil` variants
 are more accurate than the multilingual models at the same size:
@@ -288,7 +313,7 @@ On X11, check that `xdotool` is installed (`which xdotool`). On Wayland, install
 The evdev listener needs read access to `/dev/input`. Add your user to the `input` group (`sudo usermod -aG input $USER`), log out and back in. The log says which listener is in use at startup.
 
 **"Model not found" error:**
-First run downloads the Whisper model. Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
+First run downloads the selected model (Parakeet ~660 MB with the default config). Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
 
 **High latency:**
 Switch to a smaller model (`tiny` or `base`) or ensure CUDA is working if you have a GPU. Check `device: "auto"` in config.

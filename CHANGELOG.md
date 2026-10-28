@@ -172,6 +172,13 @@ below as MCC-NN).
 
 ### Changed
 
+- The template config (copied by install.sh on a fresh install) now
+  defaults to the parakeet engine, with the sherpa live-streaming preset
+  documented alongside it. New optional `stt.cpu_threads` (1-256) sets
+  inference threads for parakeet, sherpa, and whisper; unset means one per
+  physical core. Existing configs are unchanged, and a config without
+  `stt.engine` still uses whisper (MCC-123).
+
 - Whisper now runs one CTranslate2 thread per physical CPU core (6 on a
   Ryzen 5 5600G) instead of CTranslate2's default of 4: about 11-13% lower
   latency across distil-small.en, distil-medium.en, and distil-large-v3.5 on

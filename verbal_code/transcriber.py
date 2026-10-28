@@ -799,17 +799,23 @@ def create_transcriber(config: dict) -> TranscriberBase:
     stt_cfg = config.get("stt", {})
     engine: str = stt_cfg.get("engine", "whisper")
     sample_rate: int = config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE)
+    # Inference threads for the engines that expose it; None means one per
+    # physical core (see physical_core_count).
+    cpu_threads: int | None = stt_cfg.get("cpu_threads")
     _, model = current_selection(config)
 
     if engine == "parakeet":
         return ParakeetTranscriber(
             model_name=model,
             quantization=stt_cfg.get("parakeet", {}).get("quantization", "int8"),
+            cpu_threads=cpu_threads,
             sample_rate=sample_rate,
         )
 
     if engine == "sherpa":
-        return SherpaOnnxTranscriber(model_name=model, sample_rate=sample_rate)
+        return SherpaOnnxTranscriber(
+            model_name=model, cpu_threads=cpu_threads, sample_rate=sample_rate
+        )
 
     if engine == "vosk":
         return VoskTranscriber(model_name=model, sample_rate=sample_rate)
@@ -827,4 +833,5 @@ def create_transcriber(config: dict) -> TranscriberBase:
         batch_size=whisper_cfg.get("batch_size", 8),
         initial_prompt=whisper_cfg.get("initial_prompt", ""),
         sample_rate=sample_rate,
+        cpu_threads=cpu_threads,
     )

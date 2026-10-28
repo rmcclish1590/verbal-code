@@ -6,7 +6,24 @@ hotkey:
   mode: "hold"
 
 stt:
-  engine: "whisper"
+  # Two recommended presets (switch any time from the tray's Model menu;
+  # the tray saves your choice back to this file):
+  #
+  #   Push-to-talk (default): text arrives in one batch on hotkey release.
+  #     engine: "parakeet"        parakeet.model: "nemo-parakeet-tdt-0.6b-v2"
+  #     streaming_enabled: false
+  #
+  #   Live streaming: each utterance is typed as soon as you pause.
+  #     engine: "sherpa"
+  #     sherpa.model: "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+  #     streaming_enabled: true
+  #
+  # Engines: "parakeet", "sherpa", "whisper", "moonshine", "vosk".
+  engine: "parakeet"
+  # Inference threads for parakeet, sherpa, and whisper. Unset = one per
+  # physical CPU core (6 on a Ryzen 5 5600G), which is usually fastest;
+  # SMT/hyper-threads add contention rather than speed.
+  # cpu_threads: 6
   # Live injection while you speak. With the sherpa or vosk engine, each
   # utterance is typed into the focused window as it finalises (a pause ends
   # an utterance); releasing the hotkey flushes the last one. Parakeet,
