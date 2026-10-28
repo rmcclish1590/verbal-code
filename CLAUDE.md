@@ -8,7 +8,7 @@ Verbal Code is a push-to-talk speech-to-text daemon for Linux (built for Linux M
 
 ## Commands
 
-The app installs **editable from this repo** into a dedicated venv (`~/.local/share/verbal-code/venv`, created by `./install.sh`), so merged changes are live after restarting the app. Use that venv's interpreter for everything — pytest and ruff are installed there, not globally:
+The app installs **editable from this repo** into a dedicated venv (`~/.local/share/verbal-code/venv`, created by `./install.sh`), so merged changes are live after restarting the app. Use that venv's interpreter for everything — pytest and ruff are installed there, not globally (the git-ignored `.venv/` in the repo is a stale leftover without the onnx-asr/sherpa engines):
 
 ```bash
 VENV=~/.local/share/verbal-code/venv/bin
@@ -16,6 +16,7 @@ $VENV/python -m pytest -q                          # full suite (~1s, no audio h
 $VENV/python -m pytest tests/test_injector.py -q   # one file
 $VENV/python -m pytest -k "clipboard" -q           # by keyword
 $VENV/python -m ruff check .                       # lint (config in pyproject.toml)
+$VENV/python scripts/benchmark_cpu.py --record     # on-device engine benchmark (see README)
 ```
 
 Run the app: `verbal-code` (launcher) or `$VENV/python -m verbal_code`. Diagnostic flags: `--list-devices`, `--test-audio`, `--test-transcribe`, `--test-inject`, `-c <config>`. User config lives at `~/.config/verbal-code/config.yaml`; the repo's `config.yaml` is the commented template `install.sh` copies there.
@@ -37,7 +38,7 @@ Hotkey callbacks, the streaming loop, model switches, and the max-duration watch
 
 ### Config validation is fail-fast
 
-`validate_config` exits (via `sys.exit(1)`) on bad values: unknown `stt.engine`, bad `hotkey.mode`, numeric values outside `_NUMERIC_CONFIG_BOUNDS`, non-16k sample rate with Whisper. Add new numeric options to the bounds table rather than ad-hoc checks.
+`validate_config` exits (via `sys.exit(1)`) on bad values: unknown `stt.engine`, bad `hotkey.mode`, numeric values outside `_NUMERIC_CONFIG_BOUNDS`, a missing package for the selected engine (`_STT_ENGINE_PACKAGES`), and unsupported sample rates (Whisper needs 16 kHz; Parakeet accepts `_PARAKEET_SAMPLE_RATES`). Add new numeric options to the bounds table rather than ad-hoc checks.
 
 ## Testing conventions
 
@@ -49,6 +50,17 @@ Transcribed text is whatever the user speaks — treat it like a password. Never
 
 ## Workflow
 
-- Linear (team "McClish Products", project "Verbal-Code", issues `MCC-NN`) is the backlog's source of truth. One branch/PR per issue, branch name = Linear's suggested `gitBranchName`; after merge, delete the branch and comment the PR link on the issue.
+- Linear (team "McClish Products", project "Verbal-Code", issues `MCC-NN`) is the backlog's source of truth. One branch/PR per issue, branch name = Linear's suggested `gitBranchName`; after merge, delete the branch and comment the PR link on the issue. Linear's GitHub integration moves an issue to Done when its PR merges.
+- **Before any commit, rebuild the install and uninstall scripts** — see the next section. Tests never exercise them, so they drift silently.
 - Update `CHANGELOG.md` (Keep a Changelog, `[Unreleased]` section) with every user-visible change, referencing the MCC issue.
-- `specs/` are historical slice documents, not current requirements. `docs/sherpa-onnx-evaluation.md` sketches a possible future `stt.engine: "sherpa"` backend.
+- Leave PRs for the user to merge unless they ask you to merge. For dependent issues, stack each branch on the previous one. To merge a squash-merged stack, record every branch tip first, then per PR `git rebase --onto origin/main <old-parent-tip> <branch>`, run the tests, force-push, retarget with `gh api -X PATCH "repos/{owner}/{repo}/pulls/N" -f base=main` (`gh pr edit --base` fails here on a Projects-classic GraphQL error), and `gh pr merge N --squash`.
+- `specs/` are historical slice documents, not current requirements. `docs/sherpa-onnx-evaluation.md` is the MCC-21 evaluation that led to the sherpa engine (MCC-121).
+
+## Install and uninstall scripts
+
+Before committing, check `install.sh` and `uninstall.sh` against the change, update them, and rebuild the app from them:
+
+- **`install.sh`** must install everything the code needs. Python deps go through `pip install -e "<repo>[extras]"` so the `pyproject.toml` pins apply — never `pip install <pkg>` by bare name. Its engine menu lists only the optional extras (`[project.optional-dependencies]`: moonshine, vosk); parakeet, sherpa and whisper are core dependencies. New system packages go in `APT_PACKAGES`.
+- **`uninstall.sh`** must remove everything the installer or the app creates: launcher, desktop entry, icon, venv, `~/.config/verbal-code/`, `~/.cache/verbal-code/` (sherpa-onnx and vosk models, icons), and every Hugging Face repo an engine downloads (the `HF_MODELS` globs, one per org — faster-whisper's `_MODELS` table spans Systran, distil-whisper and mobiuslabsgmbh). A new engine, model source, cache path or installed file needs a matching entry; the missing distil globs left ~4 GB behind until MCC-127.
+- **Verify:** `bash -n install.sh uninstall.sh`; test cleanup with `HOME=<scratch dir> ./uninstall.sh --force` against fake cache dirs (`--force` still kills a *real* running instance — its process match ignores `HOME`); then rebuild the real venv by re-running `./install.sh` (interactive menu: pipe in the choice that keeps the extras already installed, e.g. `echo 4 | ./install.sh`) and confirm the suite passes.
+- `uninstall.sh` deletes `~/.config/verbal-code/` wholesale, including the user's `dictionary.json` — never keep backups of user config there.
