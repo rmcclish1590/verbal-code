@@ -285,11 +285,12 @@ class _FakeParakeetModel:
     def __init__(self, text="Hello world."):
         self.text = text
         self.calls: list[int] = []  # sample count of each recognize() call
+        self.sample_rates: list[int] = []
 
     def recognize(self, waveform, sample_rate=16000):
         assert waveform.dtype == np.float32
-        assert sample_rate == 16000
         self.calls.append(len(waveform))
+        self.sample_rates.append(sample_rate)
         return self.text
 
 
@@ -359,6 +360,14 @@ class TestParakeetTranscriber:
         assert sum(fake_onnx_asr.model.calls) == 60 * 16000
         assert text == "Hello world. Hello world. Hello world."
 
+    def test_capture_rate_is_passed_for_resampling(self, fake_onnx_asr):
+        # onnx-asr resamples from the rate it is told; claiming 16 kHz for
+        # 48 kHz capture would garble the audio (MCC-124).
+        t = ParakeetTranscriber(cpu_threads=2, sample_rate=48000)
+        t.load_model()
+        t.transcribe_batch(np.zeros(48000, dtype=np.float32))
+        assert set(fake_onnx_asr.model.sample_rates) == {48000}
+
     def test_transcribe_loads_lazily(self, fake_onnx_asr):
         t = ParakeetTranscriber(cpu_threads=2)
         t.transcribe_batch(np.zeros(16000, dtype=np.float32))
@@ -411,3 +420,31 @@ class TestWhisperThreads:
             AVAILABLE_MODELS["whisper"]
         )
         assert set(AVAILABLE_MODELS["whisper"]) <= set(available_models())
+
+
+# The MCC-42 contract in one table: only engines whose streamed text is final
+# may claim live streaming, since the app injects that text as it arrives.
+_LIVE_STREAMING_CONTRACT = {
+    "parakeet": False,
+    "sherpa": True,
+    "whisper": False,
+    "moonshine": False,
+    "vosk": True,
+}
+
+
+class TestEngineContract:
+    def test_every_engine_has_a_declared_contract(self):
+        assert set(_LIVE_STREAMING_CONTRACT) == set(AVAILABLE_MODELS)
+
+    @pytest.mark.parametrize("engine", list(_LIVE_STREAMING_CONTRACT))
+    def test_live_streaming_flag(self, engine):
+        t = create_transcriber({"stt": {"engine": engine}})
+        assert isinstance(t, TranscriberBase)
+        assert t.supports_live_streaming is _LIVE_STREAMING_CONTRACT[engine]
+
+    @pytest.mark.parametrize("engine", list(_LIVE_STREAMING_CONTRACT))
+    def test_every_engine_can_unload(self, engine):
+        # Constructed but never loaded: unloading must still be safe, since
+        # a model switch may unload a transcriber whatever its state.
+        create_transcriber({"stt": {"engine": engine}}).unload_model()
