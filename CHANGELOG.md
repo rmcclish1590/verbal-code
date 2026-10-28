@@ -77,6 +77,12 @@ below as MCC-NN).
 
 ### Added
 
+- `scripts/benchmark_cpu.py`: compares every installed engine/model on the
+  local CPU — cold load, latency on release, real-time factor, peak RSS per
+  model, and WER against an optional reference — over recorded or supplied
+  WAV clips. Engines that aren't installed or fail to load are reported and
+  skipped (MCC-126).
+
 - Two new speech engines, selectable via `stt.engine` and the tray's Model
   menu (MCC-119):
   - **parakeet** — NVIDIA Parakeet TDT 0.6B (v2 English, v3 multilingual)

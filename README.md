@@ -284,6 +284,26 @@ verbal-code --version            # Print version
 verbal-code --help               # Show all options
 ```
 
+## Benchmarking engines
+
+`scripts/benchmark_cpu.py` compares every installed engine/model on your own
+hardware: cold-load time, latency, real-time factor (RTF), peak memory, and —
+given a reference transcript — word error rate.
+
+```bash
+VENV=~/.local/share/verbal-code/venv/bin
+$VENV/python scripts/benchmark_cpu.py --record                 # record a 5s + 15s clip
+$VENV/python scripts/benchmark_cpu.py --wav a.wav --wav b.wav  # or use WAV files
+$VENV/python scripts/benchmark_cpu.py --wav a.wav --engines parakeet,whisper
+```
+
+A `a.txt` next to `a.wav` (or `--reference "..."`) adds a WER column. For batch
+engines latency is the transcription on release; for live engines (sherpa,
+vosk) it is the final flush on release, and RTF covers all streaming compute.
+Each model runs in its own process, so memory is per model and an engine that
+isn't installed or fails to load is listed as skipped. Models download on
+first use.
+
 ## Requirements
 
 - Linux Mint (or any X11-based Linux desktop; Wayland works with extra setup, see below)
