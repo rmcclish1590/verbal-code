@@ -33,11 +33,16 @@ Then run:
 verbal-code
 ```
 
-To uninstall completely:
+To uninstall:
 
 ```bash
-./uninstall.sh
+./uninstall.sh            # keeps your custom dictionary for a later reinstall
+./uninstall.sh --purge    # removes the dictionary too
 ```
+
+The uninstaller removes the app, venv, config and downloaded models, but
+leaves your dictionary (`~/.config/verbal-code/dictionary.json`, or your
+`dictionary.path`) in place; reinstalling picks it up automatically.
 
 ## Configuration
 
@@ -257,7 +262,7 @@ verbal-code/
 │   └── verbal-code.svg  # Application icon (installed to ~/.local/share/icons/)
 ├── config.yaml          # Default configuration (copied to ~/.config/verbal-code/ on install)
 ├── install.sh           # One-step installer
-├── uninstall.sh         # Full uninstaller (removes venv, config, cache, launcher)
+├── uninstall.sh         # Uninstaller (removes venv, config, cache, launcher; keeps dictionary unless --purge)
 ├── pyproject.toml       # Python package definition
 ├── requirements.txt     # Dependencies
 └── verbal_code/
