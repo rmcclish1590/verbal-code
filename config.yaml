@@ -7,12 +7,13 @@ hotkey:
 
 stt:
   engine: "whisper"
-  # Live injection while you speak. With the vosk engine, each utterance is
-  # typed into the focused window as it finalises (a pause ends an utterance);
-  # nothing further happens on release. Whisper/Moonshine partials are
-  # revisable, so this setting has no effect there: those engines always
-  # transcribe and inject in one batch on release.
-  # Costs continuous inference while recording (vosk only).
+  # Live injection while you speak. With the sherpa or vosk engine, each
+  # utterance is typed into the focused window as it finalises (a pause ends
+  # an utterance); releasing the hotkey flushes the last one. Parakeet,
+  # Whisper, and Moonshine have no final-text streaming, so this setting has
+  # no effect there: those engines always transcribe and inject in one batch
+  # on release.
+  # Costs continuous inference while recording (sherpa/vosk only).
   streaming_enabled: false
   whisper:
     # English-only distil model: near-small accuracy at a lower CPU cost.
@@ -29,6 +30,21 @@ stt:
     # Optional vocabulary hint to bias spelling of names/jargon, e.g.
     # "Kaeden, numpy, ctranslate2, async, kwargs".
     initial_prompt: ""
+  # Parakeet: NVIDIA Parakeet TDT on onnxruntime (INT8). Very fast, highly
+  # accurate batch transcription with punctuation and capitalisation.
+  # Downloaded from Hugging Face on first use (~660 MB).
+  parakeet:
+    # Or "nemo-parakeet-tdt-0.6b-v3" (multilingual).
+    model: "nemo-parakeet-tdt-0.6b-v2"
+    # "int8" (fast) or "" for the full-precision model (larger, slower).
+    quantization: "int8"
+  # sherpa-onnx: true live streaming (use with streaming_enabled: true).
+  # Punctuated, capitalised output. Downloaded and checksum-verified into
+  # ~/.cache/verbal-code/sherpa-onnx/ on first use.
+  sherpa:
+    # ~57 MB. Or "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+    # (~464 MB, more accurate).
+    model: "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06"
   vosk:
     model_name: "vosk-model-small-en-us-0.15"
   # Moonshine: fast English-only ASR (onnxruntime, no torch). Good on weak CPUs.

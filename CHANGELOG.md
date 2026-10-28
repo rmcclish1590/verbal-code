@@ -70,6 +70,19 @@ below as MCC-NN).
 
 ### Added
 
+- Two new speech engines, selectable via `stt.engine` and the tray's Model
+  menu (MCC-119):
+  - **parakeet** — NVIDIA Parakeet TDT 0.6B (v2 English, v3 multilingual)
+    running INT8 on onnxruntime via onnx-asr. Batch on hotkey release with
+    punctuation and capitalisation; recordings over 25s are split at the
+    quietest point near each boundary rather than mid-word (MCC-120).
+  - **sherpa** — sherpa-onnx streaming transducers (Kroko Zipformer,
+    Nemotron 0.6B) for true live dictation with `stt.streaming_enabled:
+    true`: each utterance is typed, punctuated and capitalised, as soon as
+    a pause ends it. Models download on first use from the sherpa-onnx
+    GitHub releases and are verified against a pinned SHA-256 before being
+    unpacked into `~/.cache/verbal-code/sherpa-onnx/` (MCC-121).
+
 - New tray "Logging..." window showing the hotkey-release-to-injection
   latency measurements (`dictation_latency_ms=`, MCC-30) recorded in the
   configured log file — a filtered, read-only view rather than the full

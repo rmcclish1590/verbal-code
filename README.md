@@ -59,8 +59,8 @@ Any combination of `ctrl`, `alt`, `shift`, `super` plus a trigger key. Special k
 
 ```yaml
 stt:
-  engine: "whisper"    # or "vosk"
-  streaming_enabled: false  # incremental transcription while recording (see below)
+  engine: "whisper"    # or "parakeet", "sherpa", "moonshine", "vosk"
+  streaming_enabled: false  # live injection while recording (see below)
   whisper:
     model: "distil-small.en" # see table below
     device: "auto"           # auto|cpu|cuda
@@ -69,6 +69,12 @@ stt:
     beam_size: 2          # 2 = fast; 5 = slightly more accurate, ~2x slower on CPU
     batch_size: 8            # parallel-decode batch for the batched pipeline
     initial_prompt: ""       # vocabulary hint, e.g. names/jargon to spell
+  parakeet:
+    model: "nemo-parakeet-tdt-0.6b-v2"  # or "nemo-parakeet-tdt-0.6b-v3" (multilingual)
+    quantization: "int8"     # "" = full-precision model
+  sherpa:
+    model: "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06"
+    # or "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
   moonshine:
     model: "moonshine/base"  # or "moonshine/tiny"
   vosk:
@@ -76,17 +82,24 @@ stt:
 ```
 
 `streaming_enabled` runs incremental transcription while you hold the hotkey.
-With the **vosk** engine, each utterance is injected live into the focused
-window as it finalises (a pause ends an utterance) — words appear while you
-speak, and releasing the hotkey just flushes the last utterance. Whisper and
-Moonshine produce revisable partial results that are unsafe to inject live, so
-with those engines streaming stays log-only and the text still arrives in one
-batch on release. Off by default: streaming costs continuous inference during
-recording.
+With the **sherpa** or **vosk** engine, each utterance is injected live into the
+focused window as it finalises (a pause ends an utterance) — words appear while
+you speak, and releasing the hotkey just flushes the last utterance. Parakeet,
+Whisper, and Moonshine have no final-text streaming, so with those engines the
+setting has no effect and the text arrives in one batch on release. Off by
+default: streaming costs continuous inference during recording.
 
 **Whisper models** (accuracy vs speed):
 
-- **whisper** (default) — most accurate; batched single-pass on release.
+- **whisper** (default) — batched single-pass on release; widest model choice.
+- **parakeet** — NVIDIA Parakeet TDT (INT8, onnxruntime): faster and more
+  accurate than Whisper's distil models on CPU, with punctuation and
+  capitalisation. Batch on release; recordings over 25s are split at pauses.
+  Downloads from Hugging Face on first use (~660 MB).
+- **sherpa** — sherpa-onnx streaming transducers for live dictation with
+  `streaming_enabled: true`: punctuated, capitalised text appears after each
+  pause. Models are downloaded from the sherpa-onnx GitHub releases and
+  verified against a pinned SHA-256 before use.
 - **moonshine** — fast English-only ASR on onnxruntime (no torch). Lowest
   latency on weak CPUs; great for short dictation. `base` ≈ Whisper-base
   accuracy, `tiny` is faster. Install with `pip install useful-moonshine-onnx`.
@@ -223,7 +236,8 @@ verbal-code/
     ├── audio.py         # Microphone capture (sounddevice)
     ├── hotkeys.py       # Global hotkey listener (pynput)
     ├── injector.py      # Text injection (xdotool/clipboard/ydotool)
-    ├── transcriber.py   # STT engines (faster-whisper, moonshine, vosk)
+    ├── transcriber.py   # STT engines (faster-whisper, parakeet, sherpa-onnx, moonshine, vosk)
+    ├── sherpa_models.py # sherpa-onnx model download + checksum verification
     └── tray.py          # System tray indicator (GTK3, Ayatana/AppIndicator)
 ```
 
@@ -269,7 +283,7 @@ On X11, check that `xdotool` is installed (`which xdotool`). On Wayland, install
 The evdev listener needs read access to `/dev/input`. Add your user to the `input` group (`sudo usermod -aG input $USER`), log out and back in. The log says which listener is in use at startup.
 
 **"Model not found" error:**
-First run downloads the Whisper model. Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper) or `~/.cache/verbal-code/models/` (Vosk).
+First run downloads the Whisper model. Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
 
 **High latency:**
 Switch to a smaller model (`tiny` or `base`) or ensure CUDA is working if you have a GPU. Check `device: "auto"` in config.

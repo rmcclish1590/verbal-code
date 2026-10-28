@@ -700,17 +700,41 @@ class SherpaOnnxTranscriber(TranscriberBase):
         gc.collect()
 
 
-# Model choices offered in the tray's quick-switch menu, per engine.
+# Model choices offered in the tray's quick-switch menu, per engine.  The
+# first entry of each list is that engine's default model.
 AVAILABLE_MODELS: dict[str, list[str]] = {
+    "parakeet": [
+        # Best English accuracy; punctuated and capitalised output.
+        "nemo-parakeet-tdt-0.6b-v2",
+        # Multilingual (25 European languages + English).
+        "nemo-parakeet-tdt-0.6b-v3",
+    ],
+    "sherpa": [
+        # Lightweight live streaming (~57 MB download).
+        "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+        # More accurate live streaming (~464 MB download, INT8).
+        "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+    ],
     "whisper": ["distil-small.en", "base.en", "small.en", "large-v3-turbo"],
     "moonshine": ["moonshine/base", "moonshine/tiny"],
     "vosk": ["vosk-model-small-en-us-0.15"],
 }
 
 _ENGINE_PACKAGES: dict[str, str] = {
+    "parakeet": "onnx_asr",
+    "sherpa": "sherpa_onnx",
     "whisper": "faster_whisper",
     "moonshine": "moonshine_onnx",
     "vosk": "vosk",
+}
+
+# Where each engine's model name lives in the config: stt.<section>.<key>.
+_MODEL_CONFIG_KEYS: dict[str, tuple[str, str]] = {
+    "parakeet": ("parakeet", "model"),
+    "sherpa": ("sherpa", "model"),
+    "whisper": ("whisper", "model"),
+    "moonshine": ("moonshine", "model"),
+    "vosk": ("vosk", "model_name"),
 }
 
 
@@ -725,16 +749,21 @@ def installed_engines() -> list[str]:
     ]
 
 
+def _model_key(engine: str) -> tuple[str, str, str]:
+    """Return (section, key, default model) for ``engine``; unknown engines
+    resolve like whisper, matching :func:`create_transcriber`."""
+    if engine not in _MODEL_CONFIG_KEYS:
+        engine = "whisper"
+    section, key = _MODEL_CONFIG_KEYS[engine]
+    return section, key, AVAILABLE_MODELS[engine][0]
+
+
 def current_selection(config: dict) -> tuple[str, str]:
     """Return the (engine, model) pair the config currently selects."""
     stt_cfg = config.get("stt", {})
     engine: str = stt_cfg.get("engine", "whisper")
-    if engine == "vosk":
-        model = stt_cfg.get("vosk", {}).get("model_name", "vosk-model-small-en-us-0.15")
-    elif engine == "moonshine":
-        model = stt_cfg.get("moonshine", {}).get("model", "moonshine/base")
-    else:
-        model = stt_cfg.get("whisper", {}).get("model", "distil-small.en")
+    section, key, default = _model_key(engine)
+    model: str = stt_cfg.get(section, {}).get(key, default)
     return engine, model
 
 
@@ -742,48 +771,45 @@ def apply_selection(config: dict, engine: str, model: str) -> None:
     """Write an (engine, model) choice into ``config`` in place."""
     stt_cfg = config.setdefault("stt", {})
     stt_cfg["engine"] = engine
-    if engine == "vosk":
-        stt_cfg.setdefault("vosk", {})["model_name"] = model
-    elif engine == "moonshine":
-        stt_cfg.setdefault("moonshine", {})["model"] = model
-    else:
-        stt_cfg.setdefault("whisper", {})["model"] = model
+    section, key, _ = _model_key(engine)
+    stt_cfg.setdefault(section, {})[key] = model
 
 
 def create_transcriber(config: dict) -> TranscriberBase:
     """Instantiate and return the transcriber specified by ``config['stt']['engine']``.
 
-    Supported engines: ``"whisper"`` (default), ``"moonshine"``, and ``"vosk"``.
+    Supported engines: ``"whisper"`` (default), ``"parakeet"``, ``"sherpa"``,
+    ``"moonshine"``, and ``"vosk"``.
     """
     stt_cfg = config.get("stt", {})
     engine: str = stt_cfg.get("engine", "whisper")
+    sample_rate: int = config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE)
+    _, model = current_selection(config)
+
+    if engine == "parakeet":
+        return ParakeetTranscriber(
+            model_name=model,
+            quantization=stt_cfg.get("parakeet", {}).get("quantization", "int8"),
+            sample_rate=sample_rate,
+        )
+
+    if engine == "sherpa":
+        return SherpaOnnxTranscriber(model_name=model, sample_rate=sample_rate)
 
     if engine == "vosk":
-        vosk_cfg = stt_cfg.get("vosk", {})
-        return VoskTranscriber(
-            model_name=vosk_cfg.get("model_name", "vosk-model-small-en-us-0.15"),
-            sample_rate=config.get("audio", {}).get(
-                "sample_rate", _DEFAULT_SAMPLE_RATE
-            ),
-        )
+        return VoskTranscriber(model_name=model, sample_rate=sample_rate)
 
     if engine == "moonshine":
-        moonshine_cfg = stt_cfg.get("moonshine", {})
-        return MoonshineTranscriber(
-            model_name=moonshine_cfg.get("model", "moonshine/base"),
-            sample_rate=config.get("audio", {}).get(
-                "sample_rate", _DEFAULT_SAMPLE_RATE
-            ),
-        )
+        return MoonshineTranscriber(model_name=model, sample_rate=sample_rate)
 
     whisper_cfg = stt_cfg.get("whisper", {})
     return WhisperTranscriber(
-        model_size=whisper_cfg.get("model", "distil-small.en"),
+        model_size=model,
         device=whisper_cfg.get("device", "auto"),
         compute_type=whisper_cfg.get("compute_type", "int8"),
         language=whisper_cfg.get("language", "en"),
         beam_size=whisper_cfg.get("beam_size", 2),
         batch_size=whisper_cfg.get("batch_size", 8),
         initial_prompt=whisper_cfg.get("initial_prompt", ""),
-        sample_rate=config.get("audio", {}).get("sample_rate", _DEFAULT_SAMPLE_RATE),
+        sample_rate=sample_rate,
     )
