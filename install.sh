@@ -84,20 +84,30 @@ PYTHON="$VENV_DIR/bin/python"
 # Upgrade pip
 "$PIP" install --upgrade pip --quiet
 
-# ── STT engine selection ──
+# ── Optional STT engines ──
+# parakeet, sherpa and whisper are core dependencies in pyproject.toml and
+# are always installed; only moonshine and vosk are extras.
 echo ""
-info "Parakeet (onnx-asr) and sherpa-onnx engines are always installed."
-info "Choose STT engine(s) to install:"
-echo "  1) faster-whisper (recommended, ~200MB, GPU/CPU)"
+info "Parakeet, sherpa-onnx and faster-whisper engines are always installed."
+info "Choose optional extra engine(s):"
+echo "  1) none (recommended)"
 echo "  2) moonshine (fast English-only, CPU/onnxruntime, no torch)"
-echo "  3) vosk (lightweight, ~40MB, CPU only)"
-echo "  4) all"
+echo "  3) vosk (lightweight streaming, ~40MB, lower accuracy)"
+echo "  4) both"
 echo ""
 read -rp "Enter choice [1]: " STT_CHOICE
 STT_CHOICE="${STT_CHOICE:-1}"
 
-info "Installing core dependencies..."
-"$PIP" install --quiet PyYAML "ruamel.yaml" numpy sounddevice pynput evdev
+case "$STT_CHOICE" in
+    1) EXTRAS="" ;;
+    2) EXTRAS="[moonshine]" ;;
+    3) EXTRAS="[vosk]" ;;
+    4) EXTRAS="[moonshine,vosk]" ;;
+    *)
+        warn "Invalid choice, installing no extra engines"
+        EXTRAS=""
+        ;;
+esac
 
 # Older installs pulled in torch (~2 GB) for Silero VAD; faster-whisper's
 # bundled ONNX VAD replaced it, so reclaim the space on upgrade.
@@ -107,39 +117,13 @@ if "$PIP" show torch &>/dev/null; then
     ok "torch removed"
 fi
 
-case "$STT_CHOICE" in
-    1)
-        info "Installing faster-whisper..."
-        "$PIP" install --quiet faster-whisper
-        ok "faster-whisper installed"
-        ;;
-    2)
-        info "Installing moonshine..."
-        "$PIP" install --quiet useful-moonshine-onnx
-        ok "moonshine installed"
-        ;;
-    3)
-        info "Installing vosk..."
-        "$PIP" install --quiet vosk
-        ok "vosk installed"
-        ;;
-    4)
-        info "Installing faster-whisper, moonshine, and vosk..."
-        "$PIP" install --quiet faster-whisper useful-moonshine-onnx vosk
-        ok "All engines installed"
-        ;;
-    *)
-        warn "Invalid choice, defaulting to faster-whisper"
-        "$PIP" install --quiet faster-whisper
-        ok "faster-whisper installed"
-        ;;
-esac
-
 # ── Install verbal-code package ──
-info "Installing verbal-code in editable mode..."
-"$PIP" install --quiet -e "$SCRIPT_DIR"
-"$PIP" install --quiet pytest
-ok "verbal-code package installed"
+# Installing through the package (and its extras) applies the version pins
+# in pyproject.toml; re-running the installer upgrades an existing venv.
+info "Installing verbal-code and its dependencies in editable mode..."
+"$PIP" install --quiet -e "${SCRIPT_DIR}${EXTRAS}"
+"$PIP" install --quiet pytest ruff
+ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 
 # ── Config file ──
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
@@ -204,4 +188,11 @@ echo ""
 info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"
 info "Config:  $CONFIG_DIR/config.yaml"
+info "Models download on first use (the default Parakeet model is ~660 MB)."
 echo ""
+
+# Same exact-invocation pattern as uninstall.sh, so only the app matches.
+if pgrep -f "verbal-code/venv/bin/python -m verbal_code" &>/dev/null; then
+    warn "Verbal Code is running; restart it to pick up this update."
+    echo ""
+fi

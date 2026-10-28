@@ -20,6 +20,11 @@ below as MCC-NN).
 
 ### Fixed
 
+- uninstall.sh now removes every Whisper model it can find in the Hugging
+  Face cache. It used to match only `Systran/faster-whisper-*`, leaving the
+  distil models (including the old default `distil-small.en`),
+  `distil-large-v3.5` and `large-v3-turbo` behind — several GB (MCC-127).
+
 - Switching models from the tray now unloads the previous model as soon as
   the new one is in place, instead of leaving its memory to the garbage
   collector; a failed or cancelled switch unloads whatever it had loaded.
@@ -184,6 +189,13 @@ below as MCC-NN).
 - This changelog (MCC-17).
 
 ### Changed
+
+- install.sh's engine menu now offers only the optional extras (moonshine,
+  vosk; default none), since parakeet, sherpa and whisper are always
+  installed. Everything installs through the package and its extras, so the
+  version pins in pyproject.toml apply (previously core and engine packages
+  were installed unpinned). The installer also installs ruff and warns when
+  a running instance needs a restart to pick up the update (MCC-127).
 
 - The template config (copied by install.sh on a fresh install) now
   defaults to the parakeet engine, with the sherpa live-streaming preset

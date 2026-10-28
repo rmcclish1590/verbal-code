@@ -25,7 +25,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installer handles everything: system packages, Python venv, STT model selection, and config file creation.
+The installer handles everything: system packages, Python venv, the parakeet, sherpa and whisper engines plus any optional extras (moonshine, vosk), and config file creation. Re-run it after pulling to update an existing install.
 
 Then run:
 
@@ -104,8 +104,9 @@ default: streaming costs continuous inference during recording.
   verified against a pinned SHA-256 before use.
 - **moonshine** — fast English-only ASR on onnxruntime (no torch). Lowest
   latency on weak CPUs; great for short dictation. `base` ≈ Whisper-base
-  accuracy, `tiny` is faster. Install with `pip install useful-moonshine-onnx`.
-- **vosk** — lightweight streaming recognizer; lowest resource use, lower accuracy.
+  accuracy, `tiny` is faster. Optional: pick it in the installer.
+- **vosk** — lightweight streaming recognizer; lowest resource use, lower
+  accuracy. Optional: pick it in the installer.
 
 With whisper, transcription runs as a single batched pass on release via faster-whisper's
 `BatchedInferencePipeline`, which segments the audio with Silero VAD and decodes
@@ -345,7 +346,7 @@ pynput needs access to `/dev/input/` devices. Add your user to the `input` group
 Run `verbal-code --list-devices` to see available inputs. Set `audio.device` in config to your mic's device index.
 
 **STT engine not installed:**
-If you see `ModuleNotFoundError: No module named 'faster_whisper'`, run the installer again or manually install: `~/.local/share/verbal-code/venv/bin/pip install faster-whisper`
+If the app says an engine's package isn't installed, run the installer again (it upgrades the existing venv). Parakeet, sherpa and whisper are always installed; moonshine and vosk are optional extras — choose them in the installer, or install manually from the repo: `~/.local/share/verbal-code/venv/bin/pip install -e '.[moonshine,vosk]'`
 
 **`Python.h: No such file or directory` / "Failed building wheel for evdev" during install:**
 `pynput` pulls in `evdev`, which compiles from source on Python versions without a prebuilt wheel and needs the Python development headers. Install them and re-run the installer: `sudo apt install -y python3-dev` (current `install.sh` does this automatically).
