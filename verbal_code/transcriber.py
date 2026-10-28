@@ -1,3 +1,5 @@
+import gc
+import glob
 import json
 import logging
 import os
@@ -17,8 +19,36 @@ _VOSK_PCM_CHUNK_SIZE = 4000
 # Moonshine accepts 0.1s–64s per call; split long recordings into 30s windows.
 _MOONSHINE_CHUNK_SECONDS = 30
 _MOONSHINE_MIN_SECONDS = 0.1
+# Parakeet's FastConformer attention is tuned for segments up to ~25-30s;
+# longer recordings are cut at quiet points into windows of at most this.
+_PARAKEET_CHUNK_SECONDS = 25
+_PARAKEET_MIN_SECONDS = 0.1
 _PCM_MAX_AMPLITUDE = 32767
 _PCM_MIN_AMPLITUDE = -32768
+_SYSFS_CPU_ROOT = "/sys/devices/system/cpu"
+
+
+def physical_core_count(sysfs_root: str = _SYSFS_CPU_ROOT) -> int:
+    """Return the number of physical CPU cores, ignoring SMT siblings.
+
+    ONNX Runtime and CTranslate2 inference saturates a core per thread, so
+    running one thread per *physical* core is the sweet spot; SMT siblings
+    share execution units and add contention rather than throughput.
+    ``os.cpu_count()`` reports logical CPUs (12 on a 6-core Ryzen 5 5600G),
+    so cores are counted from the sysfs topology instead, falling back to
+    ``os.cpu_count()`` where that isn't readable.
+    """
+    cores: set[tuple[str, str]] = set()
+    for topology in glob.glob(os.path.join(sysfs_root, "cpu[0-9]*", "topology")):
+        try:
+            with open(os.path.join(topology, "physical_package_id")) as f:
+                package = f.read().strip()
+            with open(os.path.join(topology, "core_id")) as f:
+                core = f.read().strip()
+        except OSError:
+            continue
+        cores.add((package, core))
+    return len(cores) or os.cpu_count() or 4
 
 
 class TranscriberBase(ABC):
@@ -57,6 +87,13 @@ class TranscriberBase(ABC):
     def stream_finalize(self) -> str:
         """Return text for audio still buffered when the stream ends."""
         return ""
+
+    def unload_model(self) -> None:
+        """Release the loaded model so its memory can be reclaimed.
+
+        The default does nothing; engines that hold a model override it.
+        """
+        return
 
 
 class WhisperTranscriber(TranscriberBase):
@@ -406,6 +443,107 @@ class MoonshineTranscriber(TranscriberBase):
     def reset(self) -> None:
         """No persistent per-session state; retained for interface compatibility."""
         return
+
+
+class ParakeetTranscriber(TranscriberBase):
+    """NVIDIA Parakeet TDT via onnx-asr — INT8 on onnxruntime, batch only.
+
+    Parakeet decodes a whole utterance in one pass (well under a second for a
+    typical dictation on a desktop CPU) and emits punctuated, capitalised text.
+    It has no incremental output, so like Whisper it transcribes once on
+    hotkey release.  Recordings longer than ``_PARAKEET_CHUNK_SECONDS`` are cut
+    at quiet points and the pieces rejoined.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "nemo-parakeet-tdt-0.6b-v2",
+        quantization: str | None = "int8",
+        cpu_threads: int | None = None,
+        sample_rate: int = _DEFAULT_SAMPLE_RATE,
+    ):
+        self.model_name = model_name
+        # onnx-asr expects None (not "") for the unquantized float model.
+        self.quantization = quantization or None
+        self.cpu_threads = cpu_threads or physical_core_count()
+        self.sample_rate = sample_rate
+        self._model: Any = None
+        self._lock = threading.Lock()
+
+    def load_model(self) -> None:
+        """Download (if needed) and load the Parakeet model, then warm it up."""
+        import onnx_asr
+        import onnxruntime as ort
+
+        logger.info(
+            "Loading Parakeet model '%s' (quantization=%s, threads=%d)...",
+            self.model_name,
+            self.quantization,
+            self.cpu_threads,
+        )
+        t0 = time.monotonic()
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = self.cpu_threads
+        # One utterance at a time: parallelism comes from intra-op threads.
+        sess_options.inter_op_num_threads = 1
+        self._model = onnx_asr.load_model(
+            self.model_name,
+            quantization=self.quantization,
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"],
+        )
+        logger.info("Parakeet model loaded in %.2fs", time.monotonic() - t0)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run one throwaway inference so the first dictation isn't penalised by
+        lazy init."""
+        try:
+            silence = np.zeros(self.sample_rate, dtype=np.float32)
+            with self._lock:
+                self._model.recognize(silence, sample_rate=self.sample_rate)
+            logger.info("Parakeet warmup complete")
+        except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            logger.debug("Warmup skipped: %s", exc)
+
+    def transcribe_batch(self, audio: np.ndarray) -> str:
+        """Transcribe ``audio``, splitting recordings longer than the model's
+        comfortable window at quiet points."""
+        from verbal_code.audio import split_at_quiet_points
+
+        if self._model is None:
+            self.load_model()
+
+        audio = np.asarray(audio, dtype=np.float32)
+        duration = len(audio) / self.sample_rate
+        logger.info("Transcribing %.2fs of audio (Parakeet)...", duration)
+        if duration < _PARAKEET_MIN_SECONDS:
+            return ""
+
+        t0 = time.monotonic()
+        parts: list[str] = []
+        with self._lock:
+            for segment in split_at_quiet_points(
+                audio, self.sample_rate, _PARAKEET_CHUNK_SECONDS
+            ):
+                if len(segment) / self.sample_rate < _PARAKEET_MIN_SECONDS:
+                    continue
+                text = self._model.recognize(segment, sample_rate=self.sample_rate)
+                if text and text.strip():
+                    parts.append(text.strip())
+
+        logger.info("Parakeet transcription done in %.2fs", time.monotonic() - t0)
+        return " ".join(parts)
+
+    def reset(self) -> None:
+        """No persistent per-session state; retained for interface compatibility."""
+        return
+
+    def unload_model(self) -> None:
+        """Drop the onnxruntime sessions so their memory can be reclaimed."""
+        with self._lock:
+            self._model = None
+        gc.collect()
 
 
 # Model choices offered in the tray's quick-switch menu, per engine.

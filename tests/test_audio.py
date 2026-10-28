@@ -1,6 +1,6 @@
 import numpy as np
 
-from verbal_code.audio import trim_silence
+from verbal_code.audio import split_at_quiet_points, trim_silence
 
 SAMPLE_RATE = 16000
 
@@ -56,6 +56,30 @@ class TestTrimSilence:
         audio = np.concatenate([_silence(1.0, amplitude=0.0001), quiet_speech])
         assert len(trim_silence(audio, SAMPLE_RATE, threshold_db=-40.0)) == 0
         assert len(trim_silence(audio, SAMPLE_RATE, threshold_db=-50.0)) > 0
+
+
+class TestSplitAtQuietPoints:
+    def test_short_audio_is_one_piece(self):
+        audio = _tone(3.0)
+        pieces = split_at_quiet_points(audio, SAMPLE_RATE, max_seconds=25)
+        assert len(pieces) == 1
+        assert np.array_equal(pieces[0], audio)
+
+    def test_cut_lands_in_the_pause(self):
+        # 22s of speech, a 0.5s pause, then 10s more: the cut must fall in
+        # the pause, not at the fixed 25s stride (mid-word).
+        audio = np.concatenate([_tone(22.0), _silence(0.5), _tone(10.0)])
+        pieces = split_at_quiet_points(audio, SAMPLE_RATE, max_seconds=25)
+        assert len(pieces) == 2
+        cut_seconds = len(pieces[0]) / SAMPLE_RATE
+        assert 22.0 <= cut_seconds <= 22.5
+
+    def test_pieces_respect_max_and_cover_everything(self):
+        audio = _tone(70.0)  # no pauses at all: still bounded
+        pieces = split_at_quiet_points(audio, SAMPLE_RATE, max_seconds=25)
+        assert all(len(p) <= 25 * SAMPLE_RATE for p in pieces)
+        assert sum(len(p) for p in pieces) == len(audio)
+        assert np.array_equal(np.concatenate(pieces), audio)
 
 
 class _FakeStatus:
