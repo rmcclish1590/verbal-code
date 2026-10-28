@@ -159,6 +159,13 @@ below as MCC-NN).
 
 ### Changed
 
+- New core dependencies `onnx-asr[cpu,hub]` (NVIDIA Parakeet TDT models on
+  onnxruntime, which faster-whisper already pulls in) and `sherpa-onnx`
+  (true live-streaming transducers), groundwork for the Parakeet and
+  sherpa engines. Both are hard dependencies rather than extras — together
+  they add ~45 MB — so every install can offer the new engines in the tray.
+  Moonshine stays on the optional `useful-moonshine-onnx` extra (MCC-118).
+
 - Dependencies carry upper bounds (next major version) in requirements.txt
   and pyproject.toml so an incompatible release can't break an install
   (MCC-24).
