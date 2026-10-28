@@ -122,9 +122,13 @@ class WhisperTranscriber(TranscriberBase):
         batch_size: int = 8,
         initial_prompt: str = "",
         sample_rate: int = _DEFAULT_SAMPLE_RATE,
+        cpu_threads: int | None = None,
     ):
         self.model_size = model_size
         self.device = device
+        # CTranslate2 defaults to 4 threads; one per physical core is faster
+        # on anything bigger (6 on a Ryzen 5 5600G).
+        self.cpu_threads = cpu_threads or physical_core_count()
         self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
@@ -146,16 +150,18 @@ class WhisperTranscriber(TranscriberBase):
         from faster_whisper import BatchedInferencePipeline, WhisperModel
 
         logger.info(
-            "Loading Whisper model '%s' (device=%s, compute_type=%s)...",
+            "Loading Whisper model '%s' (device=%s, compute_type=%s, threads=%d)...",
             self.model_size,
             self.device,
             self.compute_type,
+            self.cpu_threads,
         )
         t0 = time.monotonic()
         self._model = WhisperModel(
             self.model_size,
             device=self.device,
             compute_type=self.compute_type,
+            cpu_threads=self.cpu_threads,
         )
         self._batched = BatchedInferencePipeline(model=self._model)
         logger.info("Whisper model loaded in %.2fs", time.monotonic() - t0)
@@ -715,7 +721,16 @@ AVAILABLE_MODELS: dict[str, list[str]] = {
         # More accurate live streaming (~464 MB download, INT8).
         "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
     ],
-    "whisper": ["distil-small.en", "base.en", "small.en", "large-v3-turbo"],
+    "whisper": [
+        "distil-small.en",
+        # Between distil-small.en and distil-large-v3.5 in size and accuracy.
+        "distil-medium.en",
+        # Faster than large-v3-turbo on short clips, with similar accuracy.
+        "distil-large-v3.5",
+        "base.en",
+        "small.en",
+        "large-v3-turbo",
+    ],
     "moonshine": ["moonshine/base", "moonshine/tiny"],
     "vosk": ["vosk-model-small-en-us-0.15"],
 }

@@ -357,3 +357,45 @@ class TestParakeetTranscriber:
         t.load_model()
         t.unload_model()
         assert t._model is None
+
+
+class TestWhisperThreads:
+    @pytest.fixture
+    def fake_faster_whisper(self, monkeypatch):
+        module = types.SimpleNamespace(constructed=[])
+
+        class WhisperModel:
+            def __init__(self, model_size, **kwargs):
+                module.constructed.append((model_size, kwargs))
+
+        class BatchedInferencePipeline:
+            def __init__(self, model):
+                self.model = model
+
+            def transcribe(self, audio, **kwargs):
+                return [], None
+
+        module.WhisperModel = WhisperModel
+        module.BatchedInferencePipeline = BatchedInferencePipeline
+        monkeypatch.setitem(sys.modules, "faster_whisper", module)
+        return module
+
+    def test_load_model_passes_cpu_threads(self, fake_faster_whisper):
+        WhisperTranscriber(cpu_threads=6).load_model()
+        model_size, kwargs = fake_faster_whisper.constructed[0]
+        assert model_size == "distil-small.en"
+        assert kwargs["cpu_threads"] == 6
+
+    def test_cpu_threads_defaults_to_physical_cores(self, monkeypatch):
+        monkeypatch.setattr(
+            "verbal_code.transcriber.physical_core_count", lambda: 6
+        )
+        assert WhisperTranscriber().cpu_threads == 6
+
+    def test_menu_models_are_known_to_faster_whisper(self):
+        from faster_whisper import available_models
+
+        assert {"distil-medium.en", "distil-large-v3.5"} <= set(
+            AVAILABLE_MODELS["whisper"]
+        )
+        assert set(AVAILABLE_MODELS["whisper"]) <= set(available_models())

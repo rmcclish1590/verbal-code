@@ -114,13 +114,18 @@ loops on short dictations.
 **Whisper models** (accuracy vs speed). For English the `.en` / `distil` variants
 are more accurate than the multilingual models at the same size:
 
-| Model           | Size   | Speed   | Accuracy | Best for                  |
-|-----------------|--------|---------|----------|---------------------------|
-| tiny.en         | ~75MB  | Fastest | Fair     | Quick notes, weak CPUs    |
-| base.en         | ~140MB | Fast    | Good     | General use               |
-| distil-small.en | ~330MB | Medium  | Better   | Default — balanced on CPU |
-| small.en        | ~460MB | Medium  | Better+  | Emails, messages          |
-| large-v3-turbo  | ~1.6GB | Slower  | Great    | GPU recommended           |
+| Model             | Size   | Speed   | Accuracy | Best for                     |
+|-------------------|--------|---------|----------|------------------------------|
+| tiny.en           | ~75MB  | Fastest | Fair     | Quick notes, weak CPUs       |
+| base.en           | ~140MB | Fast    | Good     | General use                  |
+| distil-small.en   | ~330MB | Medium  | Better   | Default — balanced on CPU    |
+| small.en          | ~460MB | Medium  | Better+  | Emails, messages             |
+| distil-medium.en  | ~790MB | Slower  | Better+  | More accuracy on CPU         |
+| distil-large-v3.5 | ~1.5GB | Slow    | Great    | Best Whisper accuracy on CPU |
+| large-v3-turbo    | ~1.6GB | Slow    | Great    | GPU recommended              |
+
+Whisper runs one CTranslate2 thread per physical CPU core (6 on a Ryzen 5
+5600G) instead of CTranslate2's default of 4.
 
 ### Audio
 
