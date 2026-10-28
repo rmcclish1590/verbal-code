@@ -122,6 +122,9 @@ tray:
 
 logging:
   level: "INFO"
+  # Also write the log to a file, e.g. "~/.config/verbal-code/verbal-code.log"
+  # (the directory must exist). Needed for the tray's Logging... window,
+  # which shows each dictation's latency. See "Logging" in the README.
   file: null
   # Log the transcribed text itself. Off by default: dictation can contain
   # passwords or personal details, and logs (especially a configured file)

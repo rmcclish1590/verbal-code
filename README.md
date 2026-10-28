@@ -249,10 +249,111 @@ new model loads in the background and the choice is saved to the config file.
 logging:
   level: "INFO"        # DEBUG|INFO|WARNING|ERROR
   file: null           # or path to log file
+  log_transcripts: false
 ```
 
-Every completed dictation logs its end-to-end latency (hotkey release →
-text on screen) as a single greppable line: `dictation_latency_ms=432`.
+See the **Logging** section below for setup, the latency log, and the
+**Logging...** window.
+
+## Logging
+
+### What gets logged
+
+Verbal Code logs startup, model loads and switches, and each dictation cycle:
+start, stop, audio length, silence trimming, the number of characters
+transcribed, and whether injection succeeded. Every completed dictation also
+logs its **end-to-end latency**: the time from releasing the hotkey (the
+second press in toggle mode) to the text being on screen, as one line:
+
+```
+2026-10-28 17:48:09,354 [INFO] verbal_code: dictation_latency_ms=412
+```
+
+| Field | Meaning |
+|---|---|
+| `2026-10-28 17:48:09,354` | Local time the dictation finished (milliseconds after the comma) |
+| `[INFO]` | Log level; latency lines are always INFO |
+| `verbal_code` | The logger that wrote the line |
+| `dictation_latency_ms=412` | Milliseconds from hotkey release to injection complete |
+
+The latency covers everything after release: silence trimming, transcription,
+dictionary and punctuation processing, and typing or pasting the text. With a
+live-streaming engine (sherpa or vosk and `streaming_enabled: true`) most text
+is already typed while you speak, so it measures only the final flush. A
+cycle that is skipped (audio too short, no speech) or fails to transcribe or
+inject logs no latency line.
+
+What you say is never written to the log by default, only character counts.
+`log_transcripts: true` logs the text itself; leave it off unless you are
+debugging, because dictation can contain passwords and personal details.
+
+### Enabling the log file
+
+By default the log only goes to the terminal (stderr) that started
+`verbal-code`. If you launch from the applications menu there is no terminal,
+so to keep a log, and to use the **Logging...** window, set `logging.file`
+in `~/.config/verbal-code/config.yaml`:
+
+```yaml
+logging:
+  level: "INFO"
+  file: "~/.config/verbal-code/verbal-code.log"
+  log_transcripts: false
+```
+
+Then restart Verbal Code (the log file is opened at startup). A few rules:
+
+- `~` is expanded. The directory must already exist; Verbal Code creates
+  the file but not its directory. `~/.config/verbal-code/` always exists after
+  installing, and `uninstall.sh` removes a log kept there.
+- The file is appended to across runs and never rotated. Empty it any time
+  with `: > ~/.config/verbal-code/verbal-code.log`.
+- The file is set to owner-only permissions (`600`) on every start.
+- `level` must be `INFO` or `DEBUG` to record latency lines; `WARNING` and
+  `ERROR` hide them. An unrecognized level falls back to `INFO`.
+
+### Viewing the latency log
+
+Open the tray menu and choose **Logging...**. The window lists the last 1000
+`dictation_latency_ms` lines from the log file, newest at the bottom. It's a
+snapshot, so click **Refresh** after dictating to see new entries. For the
+full log, open the file itself or follow it with
+`tail -f ~/.config/verbal-code/verbal-code.log`.
+
+### Using latency for tuning
+
+Use the latency lines to compare engines and settings on your real
+dictations. Switch engines from the tray's **Model** menu, dictate as you
+normally would for a while, then summarize the log:
+
+```bash
+grep -o 'dictation_latency_ms=[0-9]*' ~/.config/verbal-code/verbal-code.log \
+  | cut -d= -f2 | sort -n \
+  | awk '{v[NR]=$1} END {print NR " dictations, median " v[int((NR+1)/2)] " ms, max " v[NR] " ms"}'
+```
+
+[`scripts/benchmark_cpu.py`](#benchmarking-engines) measures the
+transcription step alone on a fixed clip, so engines can be compared under
+identical input. Its latency for an engine should sit a little below your
+logged latencies, because the log also includes trimming, text processing
+and injection. If the log is much higher than the benchmark, look at
+injection: long dictations typed with `xdotool` are slower than pasting
+(see `injection.clipboard_threshold`).
+
+### Troubleshooting logging
+
+- **The Logging window says "File logging isn't configured":** `logging.file`
+  is unset or empty. Set it as above and restart.
+- **The window says "No latency entries logged yet":** no dictation has
+  completed since the file was set, `level` is `WARNING` or `ERROR`, or the
+  app wasn't restarted after setting `logging.file`.
+- **No log file appears:** the path was rejected. Start `verbal-code` from a
+  terminal and read the warning: `logging.file directory ... does not exist`
+  (create the directory), `... is a directory` (give a file name), `... is a
+  symlink` (symlinks are refused so a log can't be redirected onto another
+  file), or `Cannot open logging.file` (fix the permissions on the file or
+  directory). In each case Verbal Code keeps running and logs only to the
+  terminal.
 
 ## Architecture
 

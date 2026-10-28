@@ -82,6 +82,10 @@ below as MCC-NN).
 
 ### Added
 
+- README "Logging" section: enabling `logging.file`, the
+  `dictation_latency_ms` log format, the tray's Logging... window, using the
+  latency entries for tuning, and troubleshooting. The config template now
+  explains `logging.file` (MCC-129).
 - `scripts/benchmark_cpu.py`: compares every installed engine/model on the
   local CPU — cold load, latency on release, real-time factor, peak RSS per
   model, and WER against an optional reference — over recorded or supplied
