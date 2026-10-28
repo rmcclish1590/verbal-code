@@ -158,6 +158,9 @@ class TestNumericConfigValidation:
             {"audio__chunk_size": 1024.5},  # float for int field
             {"audio__max_seconds": -1},
             {"audio__max_seconds": "forever"},
+            {"stt__cpu_threads": 0},
+            {"stt__cpu_threads": 1000},
+            {"stt__cpu_threads": 2.5},
             {"stt__whisper__beam_size": 0},
             {"stt__whisper__beam_size": 100},
             {"stt__whisper__batch_size": 0},
@@ -170,6 +173,9 @@ class TestNumericConfigValidation:
     def test_bad_values_exit(self, overrides):
         with pytest.raises(SystemExit):
             validate_config(self._config(**overrides))
+
+    def test_cpu_threads_in_range_passes(self):
+        validate_config(self._config(stt__cpu_threads=6))
 
     def test_missing_values_use_defaults(self):
         validate_config({"stt": {"engine": "whisper"}, "audio": {}, "hotkey": {}})
@@ -275,3 +281,32 @@ class TestMainValidatesBeforeTestModes:
         monkeypatch.setattr(app, "_run_list_devices", lambda: None)
         with pytest.raises(SystemExit):
             main()
+
+
+class TestTemplatePresets:
+    """The shipped config.yaml and its documented live-streaming preset
+    both validate (MCC-123)."""
+
+    @staticmethod
+    def _template():
+        import os
+
+        path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+        return load_config(path)
+
+    def test_template_defaults_to_parakeet_push_to_talk(self):
+        config = self._template()
+        validate_config(config)
+        assert config["stt"]["engine"] == "parakeet"
+        assert config["stt"]["streaming_enabled"] is False
+        assert "cpu_threads" not in config["stt"]  # unset = physical cores
+
+    def test_live_streaming_preset_validates(self):
+        config = self._template()
+        config["stt"]["engine"] = "sherpa"
+        config["stt"]["streaming_enabled"] = True
+        config["stt"]["cpu_threads"] = 6
+        config["stt"]["sherpa"]["model"] = (
+            "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+        )
+        validate_config(config)
