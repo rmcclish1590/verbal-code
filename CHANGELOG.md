@@ -20,6 +20,10 @@ below as MCC-NN).
 
 ### Fixed
 
+- Model downloads from Hugging Face could crash with `TypeError: process() takes no keyword arguments` on systems with
+  Linux Mint's `python3-brotli` 1.1, which the venv picks up from the system
+  site-packages. Brotli 1.2 is now a pinned dependency (MCC-130).
+
 - uninstall.sh now removes every Whisper model it can find in the Hugging
   Face cache. It used to match only `Systran/faster-whisper-*`, leaving the
   distil models (including the old default `distil-small.en`),
@@ -81,6 +85,17 @@ below as MCC-NN).
   with a manual paste (MCC-39).
 
 ### Added
+
+- install.sh now downloads the speech model during installation, so the
+  first dictation doesn't wait on a ~660 MB download. Its model menu
+  defaults to Parakeet TDT 0.6B v2 and offers Parakeet v3 (multilingual),
+  the new Parakeet TDT-CTC 110M (English, ~140 MB, for slower CPUs), any
+  other installed engine's model, or skipping the download; the choice is
+  saved to the config. On a re-run the default keeps the current model, and
+  a model already in the cache isn't downloaded again. A failed download
+  only warns: the app fetches the model on first start. New
+  `verbal-code --list-models`, `--set-model ENGINE MODEL` and
+  `--download-model` do the same from the command line (MCC-130).
 
 - README "Logging" section: enabling `logging.file`, the
   `dictation_latency_ms` log format, the tray's Logging... window, using the

@@ -289,3 +289,26 @@ class TestEnsureModelDownloaded:
             ensure_sherpa_model_downloaded(_KROKO, str(cache))
         # <cache>/.extract-*/<model>/../../escaped.txt would land in <cache>.
         assert os.listdir(cache) == []
+
+
+class TestPreDownload:
+    """install.sh pre-downloads through these without loading (MCC-130)."""
+
+    def test_reports_cached_model(self, tmp_path):
+        t = SherpaOnnxTranscriber(_KROKO, cpu_threads=1, cache_dir=str(tmp_path))
+        assert t.is_model_downloaded() is False
+        (tmp_path / _KROKO).mkdir()
+        assert t.is_model_downloaded() is True
+
+    def test_download_extracts_without_loading(self, tmp_path, monkeypatch):
+        payload = _tarball({f"{_KROKO}/tokens.txt": b"tokens"})
+        monkeypatch.setitem(
+            sherpa_models.SHERPA_MODELS, _KROKO, hashlib.sha256(payload).hexdigest()
+        )
+        _serve(monkeypatch, payload)
+        t = SherpaOnnxTranscriber(_KROKO, cpu_threads=1, cache_dir=str(tmp_path))
+
+        t.download_model()
+
+        assert t.is_model_downloaded() is True
+        assert t._recognizer is None

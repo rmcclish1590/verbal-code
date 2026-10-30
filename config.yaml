@@ -49,9 +49,10 @@ stt:
     initial_prompt: ""
   # Parakeet: NVIDIA Parakeet TDT on onnxruntime (INT8). Very fast, highly
   # accurate batch transcription with punctuation and capitalisation.
-  # Downloaded from Hugging Face on first use (~660 MB).
+  # Downloaded from Hugging Face by install.sh, or on first use (~660 MB).
   parakeet:
-    # Or "nemo-parakeet-tdt-0.6b-v3" (multilingual).
+    # Or "nemo-parakeet-tdt-0.6b-v3" (multilingual, ~670 MB), or
+    # "nemo-parakeet-tdt_ctc-110m" (English, ~140 MB, for slower CPUs).
     model: "nemo-parakeet-tdt-0.6b-v2"
     # "int8" (fast) or "" for the full-precision model (larger, slower).
     quantization: "int8"
