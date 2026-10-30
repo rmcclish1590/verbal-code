@@ -189,6 +189,7 @@ HF_MODELS=(
     "$HOME"/.cache/huggingface/hub/models--mobiuslabsgmbh--faster-whisper-*
     "$HOME"/.cache/huggingface/hub/models--UsefulSensors--moonshine*
     "$HOME"/.cache/huggingface/hub/models--istupakov--parakeet-*
+    "$HOME"/.cache/huggingface/hub/models--OpenVoiceOS--nvidia-parakeet-*
 )
 HF_FOUND=false
 for m in "${HF_MODELS[@]}"; do

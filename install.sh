@@ -126,10 +126,12 @@ info "Installing verbal-code and its dependencies in editable mode..."
 ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 
 # ── Config file ──
+CONFIG_CREATED=false
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
     info "Copying default config to $CONFIG_DIR/config.yaml"
     mkdir -p "$CONFIG_DIR"
     cp "$SCRIPT_DIR/config.yaml" "$CONFIG_DIR/config.yaml"
+    CONFIG_CREATED=true
     ok "Config file created"
 else
     ok "Config file already exists at $CONFIG_DIR/config.yaml"
@@ -137,6 +139,73 @@ fi
 # uninstall.sh keeps the dictionary (MCC-128); a reinstall reuses it as-is.
 if [ -f "$CONFIG_DIR/dictionary.json" ]; then
     ok "Existing dictionary found at $CONFIG_DIR/dictionary.json; it will be used"
+fi
+
+# ── Speech model ──
+# Download the model now so the first dictation doesn't wait on it (MCC-130).
+# A fresh install defaults to Parakeet v2; on a re-run, Enter keeps whatever
+# the config already selects. A skipped or failed download happens on the
+# app's first start instead.
+CURRENT_MODEL=$("$PYTHON" -c 'import sys
+from verbal_code.app import load_config
+from verbal_code.transcriber import current_selection
+print(*current_selection(load_config(sys.argv[1])))' "$CONFIG_DIR/config.yaml")
+if [ "$CONFIG_CREATED" = true ]; then
+    MODEL_DEFAULT=1
+else
+    MODEL_DEFAULT=5
+fi
+
+echo ""
+info "Choose the speech-to-text model to download now:"
+echo "  1) Parakeet TDT 0.6B v2  - English, most accurate (~660 MB, recommended)"
+echo "  2) Parakeet TDT 0.6B v3  - English + 24 European languages (~670 MB)"
+echo "  3) Parakeet TDT-CTC 110M - English, featherweight for slower CPUs (~140 MB)"
+echo "  4) Another engine or model (sherpa-onnx live streaming, whisper, ...)"
+echo "  5) Keep the current selection ($CURRENT_MODEL)"
+echo "  6) Skip the download (it happens on the app's first start)"
+echo ""
+# `|| true`: a piped install (e.g. `echo 1 | ./install.sh`) hits EOF here
+# and takes the default rather than aborting under `set -e`.
+read -rp "Enter choice [$MODEL_DEFAULT]: " MODEL_CHOICE || true
+MODEL_CHOICE="${MODEL_CHOICE:-$MODEL_DEFAULT}"
+
+MODEL_ARGS=()
+DOWNLOAD=true
+case "$MODEL_CHOICE" in
+    1) MODEL_ARGS=(--set-model parakeet nemo-parakeet-tdt-0.6b-v2) ;;
+    2) MODEL_ARGS=(--set-model parakeet nemo-parakeet-tdt-0.6b-v3) ;;
+    3) MODEL_ARGS=(--set-model parakeet nemo-parakeet-tdt_ctc-110m) ;;
+    4)
+        mapfile -t OTHER_MODELS < <("$PYTHON" -m verbal_code --list-models | grep -v '^parakeet ')
+        echo ""
+        for i in "${!OTHER_MODELS[@]}"; do
+            echo "  $((i + 1))) ${OTHER_MODELS[$i]}"
+        done
+        read -rp "Enter choice: " OTHER_CHOICE || true
+        if [[ "$OTHER_CHOICE" =~ ^[0-9]+$ ]] \
+            && [ "$OTHER_CHOICE" -ge 1 ] && [ "$OTHER_CHOICE" -le ${#OTHER_MODELS[@]} ]; then
+            read -r OTHER_ENGINE OTHER_MODEL <<< "${OTHER_MODELS[$((OTHER_CHOICE - 1))]}"
+            MODEL_ARGS=(--set-model "$OTHER_ENGINE" "$OTHER_MODEL")
+            if [ "$OTHER_ENGINE" = sherpa ] || [ "$OTHER_ENGINE" = vosk ]; then
+                info "To type while you speak, set stt.streaming_enabled: true in $CONFIG_DIR/config.yaml"
+            fi
+        else
+            warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)"
+        fi
+        ;;
+    5) ;;
+    6) DOWNLOAD=false ;;
+    *) warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)" ;;
+esac
+
+if [ "$DOWNLOAD" = true ]; then
+    if "$PYTHON" -m verbal_code "${MODEL_ARGS[@]}" --download-model; then
+        ok "Speech model ready"
+    else
+        warn "The model download did not finish; Verbal Code retries it on first start."
+        warn "To retry now: verbal-code --download-model"
+    fi
 fi
 
 # ── Launcher script ──
@@ -192,7 +261,7 @@ echo ""
 info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"
 info "Config:  $CONFIG_DIR/config.yaml"
-info "Models download on first use (the default Parakeet model is ~660 MB)."
+info "Switch models any time from the tray's Model menu (new ones download on first use)."
 echo ""
 
 # Same exact-invocation pattern as uninstall.sh, so only the app matches.

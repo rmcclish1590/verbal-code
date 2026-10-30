@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+from typing import TextIO
 
 import yaml
 
@@ -288,6 +289,10 @@ def setup_logging(config: dict) -> None:
         handlers=[logging.StreamHandler(sys.stderr)],
         force=True,
     )
+    # huggingface_hub's HTTP client logs every request of a model download
+    # at INFO; keep only its warnings.
+    for http_logger in ("httpx", "httpx2"):
+        logging.getLogger(http_logger).setLevel(logging.WARNING)
 
     log_file = log_cfg.get("file")
     if not log_file:
@@ -977,6 +982,80 @@ def _run_test_inject(config: dict) -> None:
     print("Done!")
 
 
+def _run_list_models(file: TextIO | None = None) -> None:
+    """Print the selectable models of every installed engine, one
+    ``ENGINE MODEL`` pair per line (the tray's Model menu, as text)."""
+    from verbal_code.transcriber import AVAILABLE_MODELS, installed_engines
+
+    for engine in installed_engines():
+        for model in AVAILABLE_MODELS[engine]:
+            print(engine, model, file=file)
+
+
+def _run_set_model(
+    config: dict, config_path: str | None, engine: str, model: str
+) -> None:
+    """Select ``engine``/``model`` in the config file, as the tray's Model menu
+    does, and in ``config`` so a following ``--download-model`` fetches it."""
+    from verbal_code.config_store import update_config
+    from verbal_code.transcriber import (
+        AVAILABLE_MODELS,
+        apply_selection,
+        installed_engines,
+    )
+
+    if engine not in installed_engines() or model not in AVAILABLE_MODELS[engine]:
+        print(f"Unknown model '{engine} {model}'. Choose one of:", file=sys.stderr)
+        _run_list_models(file=sys.stderr)
+        sys.exit(2)
+    if config_path is None:
+        print("No config file found to save the model choice in.", file=sys.stderr)
+        sys.exit(1)
+    update_config(config_path, lambda cfg: apply_selection(cfg, engine, model))
+    apply_selection(config, engine, model)
+    print(f"Selected the {engine} model '{model}' in {config_path}.")
+
+
+def _run_download_model(config: dict) -> None:
+    """Download the configured engine's model ahead of the first dictation.
+
+    Exits 1 on a failed download and 130 when interrupted, so install.sh can
+    tell the user the model will be fetched on first start instead.
+    """
+    from verbal_code.transcriber import create_transcriber, current_selection
+
+    engine, model = current_selection(config)
+    transcriber = create_transcriber(config)
+    if transcriber.is_model_downloaded():
+        print(f"The {engine} model '{model}' is already downloaded.")
+        return
+    print(f"Downloading the {engine} model '{model}'...")
+    retry = "Run `verbal-code --download-model` again to finish it."
+    try:
+        transcriber.download_model()
+    except KeyboardInterrupt:
+        print(f"\nDownload interrupted. {retry}", file=sys.stderr)
+        sys.exit(130)
+    except Exception as exc:  # noqa: BLE001 — any failure gets the same advice
+        print(
+            f"Downloading the {engine} model '{model}' failed: {exc}\n"
+            f"Check your internet connection. {retry}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"The {engine} model '{model}' is ready.")
+
+
+def _run_model_commands(args: argparse.Namespace, config: dict) -> None:
+    """Handle ``--set-model`` and ``--download-model``, which combine:
+    install.sh selects a model and downloads it in one call."""
+    if args.set_model:
+        engine, model = args.set_model
+        _run_set_model(config, resolve_config_path(args.config), engine, model)
+    if args.download_model:
+        _run_download_model(config)
+
+
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="verbal-code",
@@ -1002,6 +1081,23 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Inject test text into focused window after 3s delay",
     )
     parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List the selectable models of every installed engine and exit",
+    )
+    parser.add_argument(
+        "--set-model",
+        nargs=2,
+        metavar=("ENGINE", "MODEL"),
+        help="Select an STT model in the config file and exit",
+    )
+    parser.add_argument(
+        "--download-model",
+        action="store_true",
+        help="Download the configured STT model (if missing) and exit; "
+        "with --set-model, the newly selected one",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"Verbal Code {__version__}"
     )
     return parser
@@ -1016,6 +1112,9 @@ def main() -> None:
     if args.list_devices:
         _run_list_devices()
         sys.exit(0)
+    if args.list_models:
+        _run_list_models()
+        sys.exit(0)
 
     # Validate before the remaining diagnostic modes so a missing STT package
     # produces the friendly install hint instead of a raw traceback.
@@ -1029,6 +1128,9 @@ def main() -> None:
         sys.exit(0)
     if args.test_inject:
         _run_test_inject(config)
+        sys.exit(0)
+    if args.set_model or args.download_model:
+        _run_model_commands(args, config)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_signal)

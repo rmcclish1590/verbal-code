@@ -379,6 +379,78 @@ class TestParakeetTranscriber:
         t.unload_model()
         assert t._model is None
 
+    def test_110m_model_loads_from_its_hugging_face_repo(self, fake_onnx_asr):
+        # onnx-asr has no alias for the 110M model (MCC-130).
+        ParakeetTranscriber("nemo-parakeet-tdt_ctc-110m", cpu_threads=2).load_model()
+        assert fake_onnx_asr.loads[0][0] == (
+            "OpenVoiceOS/nvidia-parakeet-tdt_ctc-110m-onnx"
+        )
+
+
+@pytest.fixture
+def fake_resolver(monkeypatch):
+    """Stand-in onnx_asr.loader whose resolver records calls and can report
+    files as missing from the local cache."""
+    loader = types.SimpleNamespace(calls=[], cached=True)
+
+    class Resolver:
+        def __init__(self, model, offline):
+            self.model, self.offline = model, offline
+
+        def resolve_model(self, *, quantization):
+            loader.calls.append((self.model, self.offline, quantization))
+            if self.offline and not loader.cached:
+                raise FileNotFoundError("encoder-model.int8.onnx")
+            return {}
+
+    loader.create_asr_resolver = lambda model, offline=None: Resolver(model, offline)
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "onnx_asr.loader", loader)
+    return loader
+
+
+class TestParakeetDownload:
+    """install.sh pre-downloads the model via these (MCC-130)."""
+
+    def test_cached_model_is_reported_downloaded_offline(self, fake_resolver):
+        assert ParakeetTranscriber(cpu_threads=2).is_model_downloaded() is True
+        assert fake_resolver.calls == [("nemo-parakeet-tdt-0.6b-v2", True, "int8")]
+
+    def test_missing_files_mean_not_downloaded(self, fake_resolver):
+        fake_resolver.cached = False
+        assert ParakeetTranscriber(cpu_threads=2).is_model_downloaded() is False
+
+    def test_download_fetches_only_the_selected_quantization(self, fake_resolver):
+        ParakeetTranscriber(
+            "nemo-parakeet-tdt_ctc-110m", quantization="", cpu_threads=2
+        ).download_model()
+        assert fake_resolver.calls == [
+            ("OpenVoiceOS/nvidia-parakeet-tdt_ctc-110m-onnx", None, None)
+        ]
+
+
+class TestDefaultDownload:
+    def test_loads_then_releases_the_model(self):
+        events = []
+
+        class Engine(TranscriberBase):
+            def load_model(self):
+                events.append("load")
+
+            def unload_model(self):
+                events.append("unload")
+
+            def transcribe_batch(self, audio):
+                return ""
+
+            def reset(self):
+                pass
+
+        engine = Engine()
+        assert engine.is_model_downloaded() is False
+        engine.download_model()
+        assert events == ["load", "unload"]
+
 
 class TestWhisperThreads:
     @pytest.fixture

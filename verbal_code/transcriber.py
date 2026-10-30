@@ -23,6 +23,11 @@ _MOONSHINE_MIN_SECONDS = 0.1
 # longer recordings are cut at quiet points into windows of at most this.
 _PARAKEET_CHUNK_SECONDS = 25
 _PARAKEET_MIN_SECONDS = 0.1
+# onnx-asr knows only the 0.6B Parakeet models by name; others load from the
+# Hugging Face repo of an onnx-asr-format export.
+_PARAKEET_MODEL_REPOS: dict[str, str] = {
+    "nemo-parakeet-tdt_ctc-110m": "OpenVoiceOS/nvidia-parakeet-tdt_ctc-110m-onnx",
+}
 # Silence appended before input_finished() so the transducer emits the
 # trailing tokens still inside its lookahead window when the stream ends.
 # Measured on the Kroko Zipformer: 0.6s (sherpa's usual example value)
@@ -100,6 +105,24 @@ class TranscriberBase(ABC):
         The default does nothing; engines that hold a model override it.
         """
         return
+
+    def is_model_downloaded(self) -> bool:
+        """Return True when the model files are already on disk.
+
+        The default can't tell and returns False; :meth:`download_model` then
+        does the work, and engines skip files they already have.
+        """
+        return False
+
+    def download_model(self) -> None:
+        """Fetch the model files so the first dictation doesn't wait on them.
+
+        The default loads the model (every engine downloads on first load)
+        and releases it again; engines that can download without loading
+        override this.
+        """
+        self.load_model()
+        self.unload_model()
 
 
 class WhisperTranscriber(TranscriberBase):
@@ -521,13 +544,40 @@ class ParakeetTranscriber(TranscriberBase):
         # One utterance at a time: parallelism comes from intra-op threads.
         sess_options.inter_op_num_threads = 1
         self._model = onnx_asr.load_model(
-            self.model_name,
+            self._model_source,
             quantization=self.quantization,
             sess_options=sess_options,
             providers=["CPUExecutionProvider"],
         )
         logger.info("Parakeet model loaded in %.2fs", time.monotonic() - t0)
         self._warmup()
+
+    @property
+    def _model_source(self) -> str:
+        """The onnx-asr model name, or Hugging Face repo id, to load from."""
+        return _PARAKEET_MODEL_REPOS.get(self.model_name, self.model_name)
+
+    def is_model_downloaded(self) -> bool:
+        """Check the Hugging Face cache for every file the model needs,
+        without touching the network."""
+        from onnx_asr.loader import create_asr_resolver
+
+        try:
+            create_asr_resolver(self._model_source, offline=True).resolve_model(
+                quantization=self.quantization
+            )
+        except FileNotFoundError:
+            return False
+        return True
+
+    def download_model(self) -> None:
+        """Download the model files (only the selected quantization) into the
+        Hugging Face cache without loading them."""
+        from onnx_asr.loader import create_asr_resolver
+
+        create_asr_resolver(self._model_source).resolve_model(
+            quantization=self.quantization
+        )
 
     def _warmup(self) -> None:
         """Run one throwaway inference so the first dictation isn't penalised by
@@ -727,6 +777,22 @@ class SherpaOnnxTranscriber(TranscriberBase):
             self._recognizer = None
         gc.collect()
 
+    def _cache_root(self) -> str:
+        from verbal_code.sherpa_models import DEFAULT_SHERPA_CACHE_DIR
+
+        return self.cache_dir or DEFAULT_SHERPA_CACHE_DIR
+
+    def is_model_downloaded(self) -> bool:
+        """The model directory only appears once a verified download is
+        fully extracted (see :func:`ensure_sherpa_model_downloaded`)."""
+        return os.path.isdir(os.path.join(self._cache_root(), self.model_name))
+
+    def download_model(self) -> None:
+        """Download, verify and unpack the model without loading it."""
+        from verbal_code.sherpa_models import ensure_sherpa_model_downloaded
+
+        ensure_sherpa_model_downloaded(self.model_name, self._cache_root())
+
 
 # Model choices offered in the tray's quick-switch menu, per engine.  The
 # first entry of each list is that engine's default model.
@@ -736,6 +802,8 @@ AVAILABLE_MODELS: dict[str, list[str]] = {
         "nemo-parakeet-tdt-0.6b-v2",
         # Multilingual (25 European languages + English).
         "nemo-parakeet-tdt-0.6b-v3",
+        # Featherweight English model (~140 MB INT8) for low-end CPUs.
+        "nemo-parakeet-tdt_ctc-110m",
     ],
     "sherpa": [
         # Lightweight live streaming (~57 MB download).

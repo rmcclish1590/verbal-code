@@ -25,7 +25,22 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installer handles everything: system packages, Python venv, the parakeet, sherpa and whisper engines plus any optional extras (moonshine, vosk), and config file creation. Re-run it after pulling to update an existing install.
+The installer handles everything: system packages, Python venv, the parakeet, sherpa and whisper engines plus any optional extras (moonshine, vosk), config file creation, and downloading the speech model so the first dictation doesn't wait on it. Re-run it after pulling to update an existing install.
+
+The installer's model menu defaults to **Parakeet TDT 0.6B v2** (English, most
+accurate, ~660 MB). The alternatives are Parakeet v3 (English + 24 European
+languages, ~670 MB), Parakeet TDT-CTC 110M (English, ~140 MB, for slower
+CPUs), any other installed engine's model, keeping the current selection, or
+skipping the download until the app's first start. The choice is saved to
+your config; a model already in the cache isn't downloaded again. On a re-run
+the default keeps your current model. The same steps are available as
+commands:
+
+```bash
+verbal-code --list-models                     # selectable models, "ENGINE MODEL" per line
+verbal-code --set-model parakeet nemo-parakeet-tdt_ctc-110m
+verbal-code --download-model                  # fetch the configured model if missing
+```
 
 Then run:
 
@@ -76,7 +91,8 @@ stt:
     batch_size: 8            # parallel-decode batch for the batched pipeline
     initial_prompt: ""       # vocabulary hint, e.g. names/jargon to spell
   parakeet:
-    model: "nemo-parakeet-tdt-0.6b-v2"  # or "nemo-parakeet-tdt-0.6b-v3" (multilingual)
+    model: "nemo-parakeet-tdt-0.6b-v2"  # or "nemo-parakeet-tdt-0.6b-v3" (multilingual),
+                                        # "nemo-parakeet-tdt_ctc-110m" (small, fast)
     quantization: "int8"     # "" = full-precision model
   sherpa:
     model: "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06"
@@ -102,7 +118,8 @@ default: streaming costs continuous inference during recording.
 - **parakeet** (template default) — NVIDIA Parakeet TDT (INT8, onnxruntime): faster and more
   accurate than Whisper's distil models on CPU, with punctuation and
   capitalisation. Batch on release; recordings over 25s are split at pauses.
-  Downloads from Hugging Face on first use (~660 MB).
+  The installer downloads it from Hugging Face (~660 MB; the 110M model is
+  ~140 MB).
 - **sherpa** — sherpa-onnx streaming transducers for live dictation with
   `streaming_enabled: true`: punctuated, capitalised text appears after each
   pause. Models are downloaded from the sherpa-onnx GitHub releases and
@@ -440,7 +457,7 @@ On X11, check that `xdotool` is installed (`which xdotool`). On Wayland, install
 The evdev listener needs read access to `/dev/input`. Add your user to the `input` group (`sudo usermod -aG input $USER`), log out and back in. The log says which listener is in use at startup.
 
 **"Model not found" error:**
-First run downloads the selected model (Parakeet ~660 MB with the default config). Ensure you have internet access. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
+The installer downloads the selected model; if that was skipped or failed, the first run downloads it (Parakeet ~660 MB with the default config). Ensure you have internet access, or fetch it ahead of time with `verbal-code --download-model`. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
 
 **High latency:**
 Switch to a smaller model (`tiny` or `base`) or ensure CUDA is working if you have a GPU. Check `device: "auto"` in config.
