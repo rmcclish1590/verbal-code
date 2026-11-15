@@ -11,6 +11,7 @@ import threading
 
 import numpy as np
 
+from verbal_code.address_itn import AddressNormalizer
 from verbal_code.app import VerbalCode
 from verbal_code.dictionary import DictionaryStore
 from verbal_code.dictionary_corrector import DictionaryCorrector
@@ -113,6 +114,7 @@ def _make_app(audio, transcriber, live=False):
     app._max_record_seconds = 300.0
     app._max_record_timer = None
     app._dictionary_enabled = True
+    app.address_normalizer = AddressNormalizer()
     app.dictionary_corrector = DictionaryCorrector(
         DictionaryStore(os.path.join(tempfile.mkdtemp(), "dictionary.json"))
     )
@@ -379,3 +381,26 @@ class TestDictationLatencyLogging:
         with caplog.at_level("INFO", logger="verbal_code"):
             app._on_dictation_stop()
         assert any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+
+class TestAddressPass:
+    """MCC-189: spoken addresses are written out before injection."""
+
+    def test_spoken_address_is_injected_written(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="Ryan at Liatrill.com"))
+        app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@liatrill.com "]
+
+    def test_disabled_pass_leaves_the_words(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="ryan at liatrio dot com"))
+        app.address_normalizer = None
+        app._on_dictation_stop()
+        assert app.injector.injected == ["Ryan at liatrio dot com "]
+
+    def test_colon_inside_an_address_is_not_punctuation(self):
+        app = _make_app(
+            _speech(),
+            _FakeTranscriber(text="see http colon slash slash localhost colon 8080"),
+        )
+        app._on_dictation_stop()
+        assert app.injector.injected == ["See http://localhost:8080 "]
