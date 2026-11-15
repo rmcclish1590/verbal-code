@@ -117,6 +117,27 @@ dictionary:
   # Defaults to ~/.config/verbal-code/dictionary.json when unset.
   path: null
 
+address:
+  # Types spoken email addresses and URLs in written form: "ryan at example
+  # dot com" becomes ryan@example.com. Runs after the dictionary and before
+  # punctuation commands. Set to false to turn the feature off entirely.
+  enabled: true
+  # Explicit mode: say "begin address", the address, then "finish address".
+  # Everything in between is converted and nothing outside it is. Address
+  # mode always ends with the dictation, so the end phrase is optional.
+  explicit: true
+  begin_phrases: ["begin address"]
+  end_phrases: ["finish address", "end address"]
+  # Inferred mode: also recognise addresses in ordinary dictation, without
+  # the begin phrase. Only matches that end in a known TLD (.com, .io, .dev,
+  # .co.uk, ...) or start with "http(s) colon slash slash" are converted, so
+  # sentences like "look at that" or "the dot product" are left alone. Turn
+  # this off if it ever changes words it shouldn't; explicit mode keeps working.
+  inferred: true
+  # More TLDs for inferred mode, e.g. ["rs", "gg"]. Explicit mode already
+  # accepts any TLD of up to six letters.
+  extra_tlds: []
+
 tray:
   enabled: true
   notifications: true

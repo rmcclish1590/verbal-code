@@ -86,6 +86,15 @@ below as MCC-NN).
 
 ### Added
 
+- Spoken email addresses and URLs are typed in written form: "ryan at
+  example dot com" becomes `ryan@example.com`, and "github dot com slash
+  anthropics" becomes `github.com/anthropics`. Say "begin address" …
+  "finish address" to mark an address explicitly. Addresses in ordinary
+  dictation are also recognised, but only when they end in a known TLD or
+  start with a protocol, so prose such as "look at that" is left alone.
+  Configure or disable this under the new `address` config section
+  (MCC-189, MCC-190).
+
 - install.sh now downloads the speech model during installation, so the
   first dictation doesn't wait on a ~660 MB download. Its model menu
   defaults to Parakeet TDT 0.6B v2 and offers Parakeet v3 (multilingual),
