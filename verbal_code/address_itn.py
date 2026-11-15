@@ -63,6 +63,21 @@ DIGIT_WORDS: dict[str, str] = {
     "nine": "9",
 }
 
+# Phonetic alphabet -> letter, for spelling inside an address (MCC-191).
+# Both spellings of the variants, since engines write "Alpha", not "Alfa".
+NATO_ALPHABET: dict[str, str] = {
+    "alfa": "a", "alpha": "a", "bravo": "b", "charlie": "c", "delta": "d",
+    "echo": "e", "foxtrot": "f", "golf": "g", "hotel": "h", "india": "i",
+    "juliett": "j", "juliet": "j", "kilo": "k", "lima": "l", "mike": "m",
+    "november": "n", "oscar": "o", "papa": "p", "quebec": "q", "romeo": "r",
+    "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
+    "whiskey": "w", "whisky": "w", "x-ray": "x", "xray": "x", "yankee": "y",
+    "zulu": "z",
+}  # fmt: skip
+
+# "capital r" -> R, for case-sensitive URL paths.
+CAPITAL_WORDS: frozenset[str] = frozenset({"capital", "cap", "uppercase"})
+
 # TLDs recognised without an explicit "begin address". This list deliberately
 # leaves out TLDs that are also common English words ("in", "is", "it", "me",
 # "us", "to", "at", "be", "so", "no", "my", "go"), because "... dot in"
@@ -136,14 +151,68 @@ def _match_multiword_symbol(tokens: Sequence[Token], i: int) -> tuple[str, int]:
     return "", 0
 
 
+_LETTER = re.compile(r"[a-z]")
+# Parakeet writes spelled letters as "R-Y-N".
+_HYPHEN_LETTERS = re.compile(r"[a-z](?:-[a-z])+")
+_DIGITS = re.compile(r"\d+")
+
+# Spelling items that show the user is spelling, as opposed to a lone NATO
+# word ("victor"), which is far likelier to be a name and stays a word.
+_SPELLING_KINDS = frozenset({"letter", "hyphen", "capital", "as_in"})
+
+
+def _spell_item(tokens: Sequence[Token], i: int) -> tuple[str, int, str] | None:
+    """One spelled item at ``i``: (written text, tokens consumed, kind)."""
+    core = tokens[i].core
+    nxt = tokens[i + 1].core if i + 1 < len(tokens) else ""
+    if core in CAPITAL_WORDS:
+        letter = nxt if _LETTER.fullmatch(nxt) else NATO_ALPHABET.get(nxt)
+        if letter:
+            return letter.upper(), 2, "capital"
+    if _LETTER.fullmatch(core):
+        window = [t.core for t in tokens[i + 1 : i + 4]]
+        if window[:2] == ["as", "in"] and window[2:] and window[2].startswith(core):
+            return core, 4, "as_in"  # "b as in bravo"
+        return core, 1, "letter"
+    if _HYPHEN_LETTERS.fullmatch(core):
+        return core.replace("-", ""), 1, "hyphen"
+    if core in NATO_ALPHABET:
+        return NATO_ALPHABET[core], 1, "nato"
+    if core in DIGIT_WORDS:
+        return DIGIT_WORDS[core], 1, "digit"
+    if _DIGITS.fullmatch(core):
+        return core, 1, "digit"
+    return None
+
+
+def _spell_run(tokens: Sequence[Token], i: int) -> list[tuple[str, int, str]]:
+    """Consecutive spelling items from ``i`` (possibly empty)."""
+    items = []
+    while i < len(tokens):
+        item = _spell_item(tokens, i)
+        if item is None:
+            break
+        items.append(item)
+        i += item[1]
+    return items
+
+
+def _is_spelling(items: list[tuple[str, int, str]]) -> bool:
+    kinds = [kind for _, _, kind in items]
+    return bool(_SPELLING_KINDS.intersection(kinds)) or kinds.count("nato") >= 2
+
+
 def assemble(tokens: Sequence[Token]) -> str:
     """Map a span's spoken words to written form and close up the whitespace.
 
-    Symbol and digit words become their symbols. Every other word is kept
-    and lowercased, together with any internal punctuation it already has
-    (``liatrio.com``). Punctuation around a word is dropped, so the caller
-    has to decide what to do with a sentence-final period. No validation
-    happens here; see :func:`is_valid_address`.
+    Symbol and digit words become their symbols. A spelled run ("r y a n",
+    "romeo yankee alpha november", "b as in bravo", "capital r") becomes its
+    letters (MCC-191). Every other word is kept and lowercased, together
+    with any internal punctuation it already has (``liatrio.com``).
+    Punctuation around a word is dropped, so the caller has to decide what
+    to do with a sentence-final period. Only "capital" letters keep their
+    case, and never in the host. No validation happens here; see
+    :func:`is_valid_address`.
     """
     pieces: list[str] = []
     i = 0
@@ -153,10 +222,25 @@ def assemble(tokens: Sequence[Token]) -> str:
             pieces.append(symbol)
             i += consumed
             continue
+        run = _spell_run(tokens, i)
+        if run and _is_spelling(run):
+            pieces.append("".join(text for text, _, _ in run))
+            i += sum(consumed for _, consumed, _ in run)
+            continue
         core = tokens[i].core
         pieces.append(SYMBOL_WORDS.get(core) or DIGIT_WORDS.get(core) or core)
         i += 1
-    return _join_pieces(pieces)
+    return _lowercase_host(_join_pieces(pieces))
+
+
+def _lowercase_host(candidate: str) -> str:
+    """Hosts are case-insensitive, so a spelled capital never reaches one."""
+    if "@" in candidate:
+        local, _, domain = candidate.rpartition("@")
+        return f"{local}@{domain.lower()}"
+    match = re.match(r"([A-Za-z]+://)?([^/?#]*)", candidate)
+    assert match is not None  # both groups can match empty
+    return match.group(0).lower() + candidate[match.end() :]
 
 
 def _join_pieces(pieces: list[str]) -> str:
@@ -320,7 +404,6 @@ _PROTOCOL_WORDS = frozenset({"http", "https", "ftp"})
 
 # One already-written chunk of an address: a word, "liatrio.com", "k2-fsa".
 _WORD_UNIT = re.compile(r"[a-z0-9](?:[a-z0-9._%+-]*[a-z0-9])?")
-_DIGITS = re.compile(r"\d+")
 
 DEFAULT_BEGIN_PHRASES = ("begin address",)
 DEFAULT_END_PHRASES = ("finish address", "end address")
@@ -341,13 +424,7 @@ class _InferredParser:
     # A span can't run past punctuation ("com, and") and can't absorb a word
     # with leading punctuation, except as its first token.
     def _can_extend(self, p: int) -> bool:
-        tokens = self.tokens
-        return (
-            p < len(tokens)
-            and p > 0
-            and not tokens[p - 1].trail
-            and not tokens[p].lead
-        )
+        return 0 < p < len(self.tokens) and self._no_break_before(p)
 
     def _is(self, p: int, *words: str) -> bool:
         return self._can_extend(p) and self.tokens[p].core in words
@@ -356,12 +433,46 @@ class _InferredParser:
         core = self.tokens[p].core
         return core in DIGIT_WORDS or _DIGITS.fullmatch(core) is not None
 
+    def _no_break_before(self, q: int) -> bool:
+        """No punctuation between tokens ``q - 1`` and ``q``, except the
+        period an engine puts after a spelled letter ("R. Y. A. N.")."""
+        prev, tok = self.tokens[q - 1], self.tokens[q]
+        if tok.lead:
+            return False
+        lettered = prev.trail == "." and _LETTER.fullmatch(prev.core) is not None
+        return not prev.trail or lettered
+
+    def _spelled_unit(self, p: int) -> int | None:
+        """End of a spelled run at ``p`` ("r y a n", "k two f s a"), if any."""
+        tokens = self.tokens
+        items: list[tuple[str, int, str]] = []
+        q = p
+        while q < len(tokens):
+            if q > p and not self._no_break_before(q):
+                break
+            item = _spell_item(tokens, q)
+            if item is None or any(
+                tokens[k].trail or tokens[k + 1].lead for k in range(q, q + item[1] - 1)
+            ):
+                break
+            items.append(item)
+            q += item[1]
+        if not items or not _is_spelling(items):
+            return None
+        if len(items) == 1 and tokens[p].core in ("a", "i"):
+            return None  # the words "a" and "I", not spelling
+        return q
+
     def _unit(self, p: int, first: bool = False) -> int | None:
-        """End of the unit at ``p``: a run of digits or one plain word."""
+        """End of the unit at ``p``: a spelled run, a run of digits, or one
+        plain word."""
         if not first and not self._can_extend(p):
             return None
         if p >= len(self.tokens):
             return None
+        spelled = self._spelled_unit(p)
+        if spelled is not None:
+            return spelled
         if self._is_digit(p):
             end = p + 1
             while self._can_extend(end) and self._is_digit(end):
@@ -411,10 +522,18 @@ class _InferredParser:
                 p = ends[-1]
         return p
 
+    def _word_at(self, i: int) -> tuple[str, int]:
+        """The written word at ``i`` and its end, joining a spelled run
+        ("h t t p s" -> "https", "w w w" -> "www")."""
+        spelled = self._spelled_unit(i)
+        if spelled is not None:
+            return assemble(self.tokens[i:spelled]), spelled
+        return self.tokens[i].core, i + 1
+
     def _match_protocol(self, i: int) -> int | None:
-        if self.tokens[i].core not in _PROTOCOL_WORDS:
+        word, p = self._word_at(i)
+        if word not in _PROTOCOL_WORDS:
             return None
-        p = i + 1
         for word in ("colon", "slash", "slash"):
             if not self._is(p, word):
                 return None
@@ -423,9 +542,9 @@ class _InferredParser:
         return self._path(end) if end is not None else None
 
     def _match_www(self, i: int) -> int | None:
-        if self.tokens[i].core != "www":
+        word, p = self._word_at(i)
+        if word != "www":
             return None
-        p = i + 1
         if self._is(p, "dot"):
             p += 1
         end = self._host(p, first=False, has_scheme=False)
