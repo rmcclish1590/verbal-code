@@ -283,6 +283,15 @@ There are two ways to mark an address:
   `look at google.com`, not `look@google.com`. Set `inferred: false` to keep
   only explicit mode.
 
+Names a model can't spell can be spelled out inside an address, letter by
+letter ("r y a n at example dot com") or with the phonetic alphabet ("romeo
+yankee alpha november"). "b as in bravo" pins down a letter that is easy to
+mishear, and "capital r" types an uppercase `R` for case-sensitive URL paths
+(hosts are always lowercase). Spoken digits join the run: "k two f s a" is
+`k2fsa`. A single phonetic word on its own, such as "victor at example dot
+com", is read as a name, not a letter. Spelling only applies inside an
+address, so prose such as "plan b at noon" is untouched.
+
 A span that doesn't form a valid address is typed as spoken, and the log
 records that this happened (by length only). Addresses are lowercased and
 never capitalised at the start of a sentence. Address conversion runs after
