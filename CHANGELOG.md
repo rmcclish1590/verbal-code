@@ -91,6 +91,20 @@ below as MCC-NN).
 
 ### Added
 
+- `./update.sh` upgrades an existing install in place, without an
+  uninstall. It builds the current checkout (`--pull` fast-forwards it
+  first), stops a running Verbal Code, and replaces only the application
+  files: the venv's packages, the launcher, the desktop entry and the icon.
+  It restarts the app afterwards, unless you pass `--no-restart`. Your
+  config, saved hotkeys and model, dictionary, logs and downloaded models
+  are never touched; the script checksums them and confirms they're
+  unchanged. A failed build changes nothing. A failed or interrupted deploy
+  rolls back to the previous version. The summary shows the old and new
+  version and commit, and `--dry-run` shows what would change (MCC-193).
+- `install.sh` now builds the package before it installs anything, so a
+  broken build stops the install with a clear error. It also prints the
+  version and commit it installed (MCC-193).
+
 - Spoken email addresses and URLs are typed in written form: "ryan at
   example dot com" becomes `ryan@example.com`, and "github dot com slash
   anthropics" becomes `github.com/anthropics`. Say "begin address" …
@@ -237,6 +251,10 @@ below as MCC-NN).
 - This changelog (MCC-17).
 
 ### Changed
+
+- `uninstall.sh` and `update.sh` only stop the Verbal Code that belongs to
+  the current `HOME`, so a scratch-`HOME` test run never stops the real
+  instance (MCC-193).
 
 - uninstall.sh now keeps your custom dictionary (`dictionary.json`, or the
   file named by `dictionary.path`) so a reinstall picks it up — curated terms

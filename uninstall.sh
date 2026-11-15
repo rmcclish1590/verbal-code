@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-fail()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG_DIR="$HOME/.config/verbal-code"
+# Paths and the running-app match, shared with install.sh and update.sh.
+# shellcheck source=scripts/install-lib.sh
+source "$SCRIPT_DIR/scripts/install-lib.sh"
 FORCE=false
 PURGE=false
 
@@ -49,26 +39,18 @@ if [ "$PURGE" != true ] && [ -f "$DICT_PATH" ]; then
 fi
 
 # ── Check for running instances ──
-# Match only the launcher's exact interpreter invocation. A broad pattern
-# like "python.*verbal_code" would also kill unrelated processes whose
-# command line merely mentions the repo (an editor's language server, a
-# pytest run, any tool passed a verbal_code path).
-APP_PATTERN="verbal-code/venv/bin/python -m verbal_code"
-
-if pgrep -f "$APP_PATTERN" &>/dev/null; then
+# APP_PATTERN (scripts/install-lib.sh) matches only this HOME's launcher
+# invocation, so unrelated processes that mention the repo are safe.
+if app_running; then
     warn "Verbal Code appears to be running."
     if [ "$FORCE" = true ]; then
         info "Stopping running instances..."
-        pkill -f "$APP_PATTERN" || true
-        sleep 2
-        pkill -9 -f "$APP_PATTERN" 2>/dev/null || true
+        stop_app || warn "Some instances did not stop"
         ok "Stopped"
     else
         read -rp "Kill running instances? [y/N] " KILL_CHOICE
         if [[ "${KILL_CHOICE,,}" == "y" ]]; then
-            pkill -f "$APP_PATTERN" || true
-            sleep 2
-            pkill -9 -f "$APP_PATTERN" 2>/dev/null || true
+            stop_app || warn "Some instances did not stop"
             ok "Stopped"
         else
             warn "Continuing with uninstall — running instance may behave unexpectedly"
@@ -99,8 +81,8 @@ REMOVED=()
 SKIPPED=()
 
 # ── Remove launcher ──
-if [ -f "$HOME/.local/bin/verbal-code" ]; then
-    rm -f "$HOME/.local/bin/verbal-code"
+if [ -f "$LAUNCHER" ]; then
+    rm -f "$LAUNCHER"
     ok "Removed launcher: ~/.local/bin/verbal-code"
     REMOVED+=("launcher")
 else
@@ -108,8 +90,8 @@ else
 fi
 
 # ── Remove desktop entry ──
-if [ -f "$HOME/.local/share/applications/verbal-code.desktop" ]; then
-    rm -f "$HOME/.local/share/applications/verbal-code.desktop"
+if [ -f "$DESKTOP_FILE" ]; then
+    rm -f "$DESKTOP_FILE"
     ok "Removed desktop entry: ~/.local/share/applications/verbal-code.desktop"
     REMOVED+=("desktop entry")
 else
@@ -117,20 +99,20 @@ else
 fi
 
 # ── Remove icon ──
-if [ -f "$HOME/.local/share/icons/hicolor/scalable/apps/verbal-code.svg" ]; then
-    rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/verbal-code.svg"
+if [ -f "$ICON_FILE" ]; then
+    rm -f "$ICON_FILE"
     ok "Removed icon: ~/.local/share/icons/hicolor/scalable/apps/verbal-code.svg"
     REMOVED+=("icon")
 else
     SKIPPED+=("icon (not found)")
 fi
 
-gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$ICON_THEME_DIR" 2>/dev/null || true
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
-# ── Remove venv ──
-if [ -d "$HOME/.local/share/verbal-code" ]; then
-    rm -rf "$HOME/.local/share/verbal-code"
+# ── Remove venv (and update.sh's version stamp and any leftover backup) ──
+if [ -d "$VC_DATA_DIR" ]; then
+    rm -rf "$VC_DATA_DIR"
     ok "Removed venv: ~/.local/share/verbal-code/"
     REMOVED+=("venv")
 else
@@ -160,8 +142,8 @@ if [ "$PURGE" = true ] && [ -f "$DICT_PATH" ]; then
 fi
 
 # ── Remove cache (sherpa-onnx and vosk models, icons) ──
-if [ -d "$HOME/.cache/verbal-code" ]; then
-    rm -rf "$HOME/.cache/verbal-code"
+if [ -d "$CACHE_DIR" ]; then
+    rm -rf "$CACHE_DIR"
     ok "Removed cache: ~/.cache/verbal-code/"
     REMOVED+=("cache")
 else

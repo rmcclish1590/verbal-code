@@ -25,7 +25,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installer handles everything: system packages, Python venv, the parakeet, sherpa and whisper engines plus any optional extras (moonshine, vosk), config file creation, and downloading the speech model so the first dictation doesn't wait on it. Re-run it after pulling to update an existing install.
+The installer handles everything: system packages, Python venv, the parakeet, sherpa and whisper engines plus any optional extras (moonshine, vosk), config file creation, and downloading the speech model so the first dictation doesn't wait on it. To upgrade later, use `./update.sh` (see [Updating](#updating)).
 
 The installer's model menu defaults to **Parakeet TDT 0.6B v2** (English, most
 accurate, ~660 MB). The alternatives are Parakeet v3 (English + 24 European
@@ -47,6 +47,29 @@ Then run:
 ```bash
 verbal-code
 ```
+
+### Updating
+
+```bash
+./update.sh               # build this checkout and deploy it over the install
+./update.sh --pull        # fast-forward to the latest upstream code first
+./update.sh --dry-run     # show what would change, change nothing
+./update.sh --no-restart  # don't start Verbal Code again afterwards
+```
+
+Use `update.sh` to upgrade an existing install, `install.sh` for a first
+install or to change the optional engines, and `uninstall.sh` to remove
+the app. The update builds the code and stops a running Verbal Code, then
+replaces only the application files: the venv's packages, the launcher,
+the desktop entry and the icon. Then it restarts the app. Your config,
+saved hotkeys and model, dictionary, logs and downloaded models are never
+touched; the script checksums them before and after and confirms they're
+unchanged. Optional engines you already installed (moonshine, vosk) are
+kept. If the build fails, nothing changes. If the deploy fails or is
+interrupted, the script restores the previous version from a temporary
+backup. The summary shows the old and new version and commit. It also
+lists any options in the repo's `config.yaml` that your config doesn't set
+yet (their defaults apply; your config is never rewritten).
 
 To uninstall:
 
@@ -445,7 +468,10 @@ verbal-code/
 │   └── verbal-code.svg  # Application icon (installed to ~/.local/share/icons/)
 ├── config.yaml          # Default configuration (copied to ~/.config/verbal-code/ on install)
 ├── install.sh           # One-step installer
+├── update.sh            # In-place upgrade with rollback (keeps config, dictionary, models)
 ├── uninstall.sh         # Uninstaller (removes venv, config, cache, launcher; keeps dictionary unless --purge)
+├── scripts/
+│   └── install-lib.sh   # Paths, app-file vs user-data split, build steps shared by the three scripts
 ├── pyproject.toml       # Python package definition
 ├── requirements.txt     # Dependencies
 └── verbal_code/
