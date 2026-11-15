@@ -248,6 +248,20 @@ Manage entries from the tray menu (**Dictionary...**): search, add, edit,
 enable/disable, and delete terms. Auto-learned entries (none exist yet —
 that's future work) would show a ✨ marker.
 
+Mark a term as a **domain or address term** (`liatrio`, `mcclish`) to help
+with addresses. The dictionary runs before address conversion, so it can
+repair a domain the model split into several words before an `@` is
+written. Give the entry the split as a variant ("lee at treo"), and "ryan
+at lee at treo dot com" becomes `ryan@liatrio.com` rather than a sentence
+with two `@`s. Next to an address, address terms are tried first, also
+match with the spaces taken out ("lia trio"), and are typed lowercase and
+unspaced. Elsewhere they behave like any other term.
+
+When you spell a name inside an address, it is added as a disabled
+candidate marked 🔤 *spelled*. Tick **Enabled** to keep it, and you won't
+have to spell it again. Set `address.suggest_spelled_terms: false` to stop
+this.
+
 ### Email Addresses and URLs
 
 ```yaml
@@ -258,6 +272,7 @@ address:
   end_phrases: ["finish address", "end address"]
   inferred: true
   extra_tlds: []          # more TLDs for inferred mode, e.g. ["rs"]
+  suggest_spelled_terms: true  # offer spelled names as dictionary candidates
 ```
 
 Spoken addresses are typed in written form:

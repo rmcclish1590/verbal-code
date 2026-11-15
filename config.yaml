@@ -137,6 +137,10 @@ address:
   # More TLDs for inferred mode, e.g. ["rs", "gg"]. Explicit mode already
   # accepts any TLD of up to six letters.
   extra_tlds: []
+  # When you spell a name inside an address ("m c c l i s h at ..."), add it
+  # to the dictionary as a disabled candidate (source "spelled"), so
+  # spelling it once is enough. Enable it in the tray's Dictionary... window.
+  suggest_spelled_terms: true
 
 tray:
   enabled: true

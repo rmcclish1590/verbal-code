@@ -20,6 +20,11 @@ below as MCC-NN).
 
 ### Fixed
 
+- Fuzzy dictionary matching no longer swallows a neighbouring word. With a
+  multi-word variant in the dictionary, "at liatrio" was close enough to
+  the term "liatrio" to be replaced whole, dropping the "at". Fuzzy matches
+  now compare only phrases with the same number of words (MCC-192).
+
 - Model downloads from Hugging Face could crash with `TypeError: process() takes no keyword arguments` on systems with
   Linux Mint's `python3-brotli` 1.1, which the venv picks up from the system
   site-packages. Brotli 1.2 is now a pinned dependency (MCC-130).
@@ -101,6 +106,14 @@ below as MCC-NN).
   uppercase letter in a URL path, and spoken digits ("k two f s a" →
   `k2fsa`). Parakeet's hyphenated spelling (`R-Y-N`) is recognised too
   (MCC-191).
+
+- Dictionary entries can be marked as a domain or address term. Next to an
+  address, these terms are tried first, also match with the spaces removed
+  ("lia trio" → `liatrio`), and are typed lowercase. A variant such as "lee
+  at treo" repairs a domain the model split up before address conversion
+  sees the stray "at". A name you spell inside an address is added as a
+  disabled 🔤 *spelled* candidate, so enabling it once saves spelling it
+  again (`address.suggest_spelled_terms`) (MCC-192).
 
 - install.sh now downloads the speech model during installation, so the
   first dictation doesn't wait on a ~660 MB download. Its model menu

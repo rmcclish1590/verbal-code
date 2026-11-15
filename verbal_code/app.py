@@ -53,9 +53,10 @@ _STT_ENGINE_PACKAGES: dict[str, tuple[str, str]] = {
 _PARAKEET_SAMPLE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
 
 
-def _create_address_normalizer(config: dict):
+def _create_address_normalizer(config: dict, on_spelled=None):
     """Build the address ITN pass from ``config["address"]``, or None when
-    it is disabled (MCC-188)."""
+    it is disabled (MCC-188). ``on_spelled`` receives each term spelled out
+    in an address, unless ``address.suggest_spelled_terms`` is off."""
     from verbal_code.address_itn import (
         DEFAULT_BEGIN_PHRASES,
         DEFAULT_END_PHRASES,
@@ -71,6 +72,7 @@ def _create_address_normalizer(config: dict):
         begin_phrases=cfg.get("begin_phrases") or DEFAULT_BEGIN_PHRASES,
         end_phrases=cfg.get("end_phrases") or DEFAULT_END_PHRASES,
         extra_tlds=cfg.get("extra_tlds") or (),
+        on_spelled=on_spelled if cfg.get("suggest_spelled_terms", True) else None,
     )
 
 
@@ -185,7 +187,7 @@ def validate_config(config: dict) -> None:
     _assert_address_config(config)
 
 
-_ADDRESS_BOOL_KEYS = ("enabled", "explicit", "inferred")
+_ADDRESS_BOOL_KEYS = ("enabled", "explicit", "inferred", "suggest_spelled_terms")
 _ADDRESS_LIST_KEYS = ("begin_phrases", "end_phrases", "extra_tlds")
 
 
@@ -466,7 +468,10 @@ class VerbalCode:
                 "fuzzy_threshold", DEFAULT_FUZZY_THRESHOLD
             ),
         )
-        self.address_normalizer = _create_address_normalizer(config)
+        self.address_normalizer = _create_address_normalizer(
+            config,
+            on_spelled=self._on_spelled_term if self._dictionary_enabled else None,
+        )
         self.hotkey = create_hotkey_listener(
             modifiers=self._hotkey_modifiers,
             key=self._hotkey_key,
@@ -950,6 +955,25 @@ class VerbalCode:
         if self.address_normalizer is not None:
             text = self.address_normalizer.normalize(text)
         return self.text_processor.process(text)
+
+    def _on_spelled_term(self, term: str) -> None:
+        """Offer a term spelled out in an address as a dictionary candidate
+        (MCC-192). It is added disabled, with source "spelled", so it does
+        nothing until the user enables it in the Dictionary window. The
+        term is dictation, so it is never logged."""
+        if self.dictionary_store.lookup(term) is not None:
+            return
+        try:
+            self.dictionary_store.add(
+                term, source="spelled", enabled=False, address=True
+            )
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "Couldn't save a spelled dictionary candidate: %s",
+                type(exc).__name__,
+            )
+            return
+        logger.info("Added a spelled dictionary candidate (%d chars)", len(term))
 
     def _apply_dictionary(self, text: str) -> str:
         """Correct known-mangled terms before punctuation/capitalization
