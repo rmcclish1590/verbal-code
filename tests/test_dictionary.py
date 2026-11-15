@@ -161,3 +161,28 @@ class TestDictionaryEntryMatches:
         assert entry.matches("engen")
         assert entry.matches("Engine")
         assert not entry.matches("unrelated")
+
+
+class TestAddressFlag:
+    """MCC-192: address terms and spelled candidates."""
+
+    def test_address_flag_round_trips(self, tmp_path):
+        path = str(tmp_path / "dictionary.json")
+        DictionaryStore(path).add("liatrio", address=True, source="spelled")
+        entry = DictionaryStore(path).lookup("liatrio")
+        assert entry.address and entry.source == "spelled"
+
+    def test_update_sets_the_flag(self, tmp_path):
+        store = DictionaryStore(str(tmp_path / "dictionary.json"))
+        store.add("liatrio")
+        assert store.update("liatrio", address=True).address
+
+    def test_old_file_without_the_flag_loads(self, tmp_path):
+        path = tmp_path / "dictionary.json"
+        path.write_text('{"entries": [{"term": "EnGen", "variants": []}]}')
+        assert DictionaryStore(str(path)).lookup("engen").address is False
+
+    def test_unknown_fields_from_a_newer_version_are_ignored(self, tmp_path):
+        path = tmp_path / "dictionary.json"
+        path.write_text('{"entries": [{"term": "EnGen", "weight": 2}]}')
+        assert DictionaryStore(str(path)).lookup("engen") is not None

@@ -68,3 +68,8 @@ class TestSourceLabel:
         label = _source_label(_entry("EnGen", source="auto-learned"))
         assert "auto-learned" in label
         assert "✨" in label
+
+
+def test_spelled_candidate_gets_a_marker():
+    entry = DictionaryEntry(term="mcclish", source="spelled", enabled=False)
+    assert _source_label(entry) == "🔤 spelled (candidate)"

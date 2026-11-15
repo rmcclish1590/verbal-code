@@ -20,7 +20,7 @@ path if the rule set outgrows readable code.
 
 import logging
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -202,7 +202,11 @@ def _is_spelling(items: list[tuple[str, int, str]]) -> bool:
     return bool(_SPELLING_KINDS.intersection(kinds)) or kinds.count("nato") >= 2
 
 
-def assemble(tokens: Sequence[Token]) -> str:
+# A spelled run this long or longer is offered as a dictionary candidate.
+_MIN_SPELLED_TERM_LEN = 3
+
+
+def assemble(tokens: Sequence[Token], spelled: list[str] | None = None) -> str:
     """Map a span's spoken words to written form and close up the whitespace.
 
     Symbol and digit words become their symbols. A spelled run ("r y a n",
@@ -212,7 +216,8 @@ def assemble(tokens: Sequence[Token]) -> str:
     Punctuation around a word is dropped, so the caller has to decide what
     to do with a sentence-final period. Only "capital" letters keep their
     case, and never in the host. No validation happens here; see
-    :func:`is_valid_address`.
+    :func:`is_valid_address`. Spelled runs of three or more characters
+    are appended to ``spelled`` when it is given (MCC-192).
     """
     pieces: list[str] = []
     i = 0
@@ -224,8 +229,15 @@ def assemble(tokens: Sequence[Token]) -> str:
             continue
         run = _spell_run(tokens, i)
         if run and _is_spelling(run):
-            pieces.append("".join(text for text, _, _ in run))
+            word = "".join(text for text, _, _ in run)
+            pieces.append(word)
             i += sum(consumed for _, consumed, _ in run)
+            if (
+                spelled is not None
+                and len(word) >= _MIN_SPELLED_TERM_LEN
+                and not word.isdigit()
+            ):
+                spelled.append(word.lower())
             continue
         core = tokens[i].core
         pieces.append(SYMBOL_WORDS.get(core) or DIGIT_WORDS.get(core) or core)
@@ -311,15 +323,22 @@ def is_valid_address(candidate: str, tlds: Iterable[str] | None = None) -> bool:
     return is_valid_url(candidate, tlds)
 
 
-def convert_span(text: str, tlds: Iterable[str] | None = None) -> str | None:
+def convert_span(
+    text: str,
+    tlds: Iterable[str] | None = None,
+    spelled: list[str] | None = None,
+) -> str | None:
     """Convert a spoken address span to written form.
 
     Returns None when the result isn't a valid address, so the caller can
     leave the span as spoken text instead of typing something malformed.
     The failure is logged by length only, because span text is dictation.
     """
-    candidate = assemble(tokenize(text))
+    runs: list[str] = []
+    candidate = assemble(tokenize(text), runs)
     if is_valid_address(candidate, tlds):
+        if spelled is not None:
+            spelled.extend(runs)
         return candidate
     logger.info(
         "Address span failed validation; leaving it as spoken text (%d chars)",
@@ -600,8 +619,12 @@ class AddressNormalizer:
         begin_phrases: Iterable[str] = DEFAULT_BEGIN_PHRASES,
         end_phrases: Iterable[str] = DEFAULT_END_PHRASES,
         extra_tlds: Iterable[str] = (),
+        on_spelled: Callable[[str], None] | None = None,
     ) -> None:
+        """``on_spelled`` is called with each term spelled out in a converted
+        address, so the app can offer it as a dictionary candidate."""
         self.explicit = explicit
+        self._on_spelled = on_spelled
         self.inferred = inferred
         self._begin = _phrase_words(begin_phrases)
         self._end = _phrase_words(end_phrases)
@@ -610,13 +633,26 @@ class AddressNormalizer:
     def normalize(self, text: str) -> str:
         if not text or not (self.explicit or self.inferred):
             return text
-        pieces = self._explicit_pass(text) if self.explicit else [(text, False)]
+        spelled: list[str] = []
+        pieces = (
+            self._explicit_pass(text, spelled) if self.explicit else [(text, False)]
+        )
         if self.inferred:
             pieces = [
-                (piece if done else self._inferred_pass(piece), done)
+                (piece if done else self._inferred_pass(piece, spelled), done)
                 for piece, done in pieces
             ]
+        self._report_spelled(spelled)
         return "".join(piece for piece, _ in pieces)
+
+    def _report_spelled(self, spelled: list[str]) -> None:
+        if self._on_spelled is None:
+            return
+        for term in dict.fromkeys(spelled):  # dedupe, keep order
+            try:
+                self._on_spelled(term)
+            except Exception as exc:  # never lose the dictation over this
+                logger.warning("Spelled-term callback failed: %s", type(exc).__name__)
 
     # -- explicit mode --
 
@@ -637,7 +673,7 @@ class AddressNormalizer:
                     return len(words)
         return 0
 
-    def _explicit_pass(self, text: str) -> list[tuple[str, bool]]:
+    def _explicit_pass(self, text: str, spelled: list[str]) -> list[tuple[str, bool]]:
         """Split ``text`` into (piece, converted) pairs. Converted pieces are
         explicit-mode output that inferred mode must not touch again."""
         tokens = tokenize(text)
@@ -665,7 +701,7 @@ class AddressNormalizer:
             pieces.append((text[cursor : tokens[i].start + len(tokens[i].lead)], False))
             if span:
                 spoken = text[span[0].start : span[-1].core_end]
-                converted = convert_span(spoken)
+                converted = convert_span(spoken, spelled=spelled)
                 pieces.append((converted if converted is not None else spoken, True))
             elif not last.trail and region_end < len(text) and text[region_end] == " ":
                 region_end += 1  # don't leave a double space behind
@@ -677,17 +713,19 @@ class AddressNormalizer:
 
     # -- inferred mode --
 
-    def _inferred_pass(self, text: str) -> str:
+    def _inferred_pass(self, text: str, spelled: list[str]) -> str:
         tokens = tokenize(text)
         out = []
         cursor = 0
         for i, end in _InferredParser(tokens, self._tlds).spans():
             first, last = tokens[i], tokens[end - 1]
-            candidate = assemble(tokens[i:end])
+            runs: list[str] = []
+            candidate = assemble(tokens[i:end], runs)
             region_start = first.start + len(first.lead)
             original = text[region_start : last.core_end]
             if candidate == original or not is_valid_address(candidate, None):
                 continue
+            spelled.extend(runs)
             out.append(text[cursor:region_start])
             out.append(candidate)
             cursor = last.core_end

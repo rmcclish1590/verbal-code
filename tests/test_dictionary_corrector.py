@@ -107,3 +107,86 @@ class TestThreshold:
         strict = DictionaryCorrector(store, fuzzy_threshold=0.99)
 
         assert strict.correct("we work at anthropik") == "we work at anthropik"
+
+
+class TestPhraseFuzzyMatching:
+    def test_fuzzy_phrase_does_not_swallow_a_neighbouring_word(self, tmp_path):
+        # A 3-word variant raises the n-gram length. "at liatrio" is close
+        # enough to "liatrio" to pass the threshold, but the "at" must survive.
+        store = _store(tmp_path)
+        store.add("Liatrio", variants=["lee at treo"])
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at liatrio dot com") == (
+            "ryan at Liatrio dot com"
+        )
+
+
+class TestAddressTerms:
+    """MCC-192: entries flagged ``address`` next to an address."""
+
+    def test_split_domain_variant_collapses_to_one_token(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("Liatrio", variants=["lee at treo"], address=True)
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at lee at treo dot com") == (
+            "ryan at liatrio dot com"
+        )
+
+    def test_unspaced_match_next_to_an_address(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("liatrio", address=True)
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at lia trio dot com") == (
+            "ryan at liatrio dot com"
+        )
+
+    def test_unspaced_fuzzy_match_only_next_to_an_address(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("liatrio", address=True)
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at lia treo dot com") == (
+            "ryan at liatrio dot com"
+        )
+        assert corrector.correct("the lia treo is great") == "the lia treo is great"
+
+    def test_domain_stuck_to_its_tld_counts_as_an_address(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("liatrio", address=True)
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at lia treo.com") == "ryan at liatrio.com"
+
+    def test_emitted_lowercase_and_unspaced_in_an_address(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("Lia Trio", address=True)
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at lia trio dot com") == (
+            "ryan at liatrio dot com"
+        )
+        assert corrector.correct("I like lia trio a lot") == "I like Lia Trio a lot"
+
+    def test_join_never_swallows_a_symbol_word(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("liatrio", address=True)
+        corrector = DictionaryCorrector(store)
+
+        # "lia trio dot" -> "liatriodot" is fuzzy-close to "liatrio".
+        assert corrector.correct("ryan at lia trio dot com") == (
+            "ryan at liatrio dot com"
+        )
+
+    def test_address_terms_are_preferred_next_to_an_address(self, tmp_path):
+        store = _store(tmp_path)
+        store.add("liatrio", address=True)
+        store.add("Liatrion")  # closer to "liatrin" than "liatrio" is
+        corrector = DictionaryCorrector(store)
+
+        assert corrector.correct("ryan at liatrin dot com") == (
+            "ryan at liatrio dot com"
+        )
+        assert corrector.correct("I said liatrin") == "I said Liatrion"
