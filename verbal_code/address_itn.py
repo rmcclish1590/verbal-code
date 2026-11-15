@@ -392,6 +392,10 @@ class _InferredParser:
         tlds = None if has_scheme else self.tlds
         for end in reversed(self._chain(p, _HOST_JOINERS, first)):
             host = assemble(self.tokens[p:end])
+            # Without a protocol, an all-digit label is far likelier to be a
+            # number in a sentence ("two dot com companies") than a domain.
+            if not has_scheme and any(label.isdigit() for label in host.split(".")):
+                continue
             if _host_ok(host, tlds, has_scheme):
                 return end
         return None

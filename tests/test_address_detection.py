@@ -42,6 +42,9 @@ FALSE_POSITIVE_PROSE = [
     "Ryan is at lunch.",
     "Look at that, dot com.",
     "the cat sat at the mat",
+    "we have two dot com companies",
+    "version 2 dot 1 is out",
+    "meet at 5 dot com",
 ]
 
 
