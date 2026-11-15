@@ -95,6 +95,13 @@ below as MCC-NN).
   Configure or disable this under the new `address` config section
   (MCC-189, MCC-190).
 
+- Inside an address, names can be spelled letter by letter ("r y a n at
+  example dot com") or with the phonetic alphabet ("romeo yankee alpha
+  november"). Also supported: "b as in bravo", "capital r" for an
+  uppercase letter in a URL path, and spoken digits ("k two f s a" →
+  `k2fsa`). Parakeet's hyphenated spelling (`R-Y-N`) is recognised too
+  (MCC-191).
+
 - install.sh now downloads the speech model during installation, so the
   first dictation doesn't wait on a ~660 MB download. Its model menu
   defaults to Parakeet TDT 0.6B v2 and offers Parakeet v3 (multilingual),

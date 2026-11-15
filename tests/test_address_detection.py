@@ -45,6 +45,16 @@ FALSE_POSITIVE_PROSE = [
     "we have two dot com companies",
     "version 2 dot 1 is out",
     "meet at 5 dot com",
+    # single letters and phonetic-alphabet words (MCC-191)
+    "I a m here",
+    "plan b at noon",
+    "vitamin c and d at breakfast",
+    "the letters a b c at the top",
+    "Mike at the office",
+    "Romeo and Juliet at the Globe",
+    "a b testing at scale",
+    "capital letters at the start",
+    "Plan B. At noon we left.",
 ]
 
 
