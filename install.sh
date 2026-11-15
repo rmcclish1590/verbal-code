@@ -1,22 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-fail()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
-
-VENV_DIR="$HOME/.local/share/verbal-code/venv"
-CONFIG_DIR="$HOME/.config/verbal-code"
-LAUNCHER="$HOME/.local/bin/verbal-code"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Paths, app-file vs user-data split, build and deploy steps shared with
+# update.sh and uninstall.sh (MCC-193).
+# shellcheck source=scripts/install-lib.sh
+source "$SCRIPT_DIR/scripts/install-lib.sh"
 
 # ── Python version check ──
 info "Checking Python version..."
@@ -33,40 +22,9 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
 fi
 ok "Python $PY_VERSION"
 
-# ── System dependencies ──
-APT_PACKAGES=(
-    xdotool
-    xclip
-    libportaudio2
-    portaudio19-dev
-    python3-gi
-    libnotify-bin
-    python3-venv
-    python3-dev
-)
-
-# Prefer the maintained Ayatana indicator library; older releases only ship
-# the legacy AppIndicator3. The tray code accepts either at runtime.
-if apt-cache show gir1.2-ayatanaappindicator3-0.1 &>/dev/null; then
-    APT_PACKAGES+=(gir1.2-ayatanaappindicator3-0.1)
-else
-    APT_PACKAGES+=(gir1.2-appindicator3-0.1)
-fi
-
-MISSING=()
-for pkg in "${APT_PACKAGES[@]}"; do
-    if ! dpkg -s "$pkg" &>/dev/null; then
-        MISSING+=("$pkg")
-    fi
-done
-
-if [ ${#MISSING[@]} -gt 0 ]; then
-    info "Installing system packages: ${MISSING[*]}"
-    sudo apt install -y "${MISSING[@]}"
-    ok "System packages installed"
-else
-    ok "All system packages already installed"
-fi
+# ── System dependencies (APT_PACKAGES in scripts/install-lib.sh) ──
+add_indicator_package
+install_missing_apt_packages
 
 # ── Python venv ──
 if [ -d "$VENV_DIR" ]; then
@@ -78,11 +36,8 @@ else
     ok "Venv created"
 fi
 
-PIP="$VENV_DIR/bin/pip"
-PYTHON="$VENV_DIR/bin/python"
-
 # Upgrade pip
-"$PIP" install --upgrade pip --quiet
+"$PYTHON" -m pip install --upgrade pip --quiet
 
 # ── Optional STT engines ──
 # parakeet, sherpa and whisper are core dependencies in pyproject.toml and
@@ -111,18 +66,19 @@ esac
 
 # Older installs pulled in torch (~2 GB) for Silero VAD; faster-whisper's
 # bundled ONNX VAD replaced it, so reclaim the space on upgrade.
-if "$PIP" show torch &>/dev/null; then
+if "$PYTHON" -m pip show torch &>/dev/null; then
     info "Removing obsolete torch dependency (~2 GB)..."
-    "$PIP" uninstall --quiet -y torch torchaudio 2>/dev/null || true
+    "$PYTHON" -m pip uninstall --quiet -y torch torchaudio 2>/dev/null || true
     ok "torch removed"
 fi
 
-# ── Install verbal-code package ──
-# Installing through the package (and its extras) applies the version pins
-# in pyproject.toml; re-running the installer upgrades an existing venv.
+# ── Build, then install the verbal-code package ──
+# A failed build stops here, before anything is installed (MCC-132).
+# Re-running the installer upgrades an existing venv; ./update.sh does the
+# same with rollback and without the menus.
+build_package "$SCRIPT_DIR" "$EXTRAS"
 info "Installing verbal-code and its dependencies in editable mode..."
-"$PIP" install --quiet -e "${SCRIPT_DIR}${EXTRAS}"
-"$PIP" install --quiet pytest ruff
+deploy_package "$SCRIPT_DIR" "$EXTRAS"
 ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 
 # ── Config file ──
@@ -208,44 +164,12 @@ if [ "$DOWNLOAD" = true ]; then
     fi
 fi
 
-# ── Launcher script ──
-info "Creating launcher at $LAUNCHER"
-mkdir -p "$(dirname "$LAUNCHER")"
-cat > "$LAUNCHER" << 'LAUNCHER_EOF'
-#!/usr/bin/env bash
-VENV="$HOME/.local/share/verbal-code/venv"
-exec "$VENV/bin/python" -m verbal_code "$@"
-LAUNCHER_EOF
-chmod +x "$LAUNCHER"
-ok "Launcher created"
-
-# ── Desktop entry ──
-ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
-DESKTOP_DIR="$HOME/.local/share/applications"
-
-info "Installing application icon..."
-mkdir -p "$ICON_DIR"
-cp "$SCRIPT_DIR/assets/verbal-code.svg" "$ICON_DIR/verbal-code.svg"
-ok "Icon installed"
-
-info "Creating desktop entry..."
-mkdir -p "$DESKTOP_DIR"
-cat > "$DESKTOP_DIR/verbal-code.desktop" << 'DESKTOP_EOF'
-[Desktop Entry]
-Type=Application
-Name=Verbal Code
-Comment=Voice-to-text for coding — speak and type
-Exec=bash -c '"$HOME/.local/bin/verbal-code"'
-Icon=verbal-code
-Terminal=false
-Categories=Utility;Accessibility;
-Keywords=voice;speech;dictation;transcription;microphone;
-StartupNotify=false
-DESKTOP_EOF
-ok "Desktop entry created"
-
-gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+# ── Launcher, desktop entry and icon ──
+info "Installing the launcher, desktop entry and icon..."
+install_app_files "$SCRIPT_DIR"
+ok "Launcher: $LAUNCHER"
+ok "Desktop entry and icon installed"
+write_stamp "$(source_version "$SCRIPT_DIR")" "$(source_commit "$SCRIPT_DIR")"
 
 # ── PATH check ──
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
@@ -256,16 +180,16 @@ fi
 
 # ── Done ──
 echo ""
-ok "Verbal Code installed successfully!"
+ok "Verbal Code $(read_stamp version) ($(read_stamp commit)) installed successfully!"
 echo ""
 info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"
+info "Update:  ./update.sh (keeps your config, dictionary and models)"
 info "Config:  $CONFIG_DIR/config.yaml"
 info "Switch models any time from the tray's Model menu (new ones download on first use)."
 echo ""
 
-# Same exact-invocation pattern as uninstall.sh, so only the app matches.
-if pgrep -f "verbal-code/venv/bin/python -m verbal_code" &>/dev/null; then
+if app_running; then
     warn "Verbal Code is running; restart it to pick up this update."
     echo ""
 fi

@@ -1,0 +1,503 @@
+"""update.sh end to end (MCC-193), against a scratch HOME.
+
+Each test copies the scripts into a throwaway git checkout and runs them
+with HOME pointing at a temp dir. The venv's ``python`` is a bash stub:
+``-m pip`` logs its arguments and fails on demand (``FAKE_FAIL``), and
+``-m verbal_code`` with no arguments idles like the running app. The
+scripts' process match is anchored on the scratch HOME's venv path, so the
+real Verbal Code is never stopped.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import signal
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parent.parent
+
+FAKE_PYTHON = r"""#!/usr/bin/env bash
+venv="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then
+    shift 2
+    echo "pip $*" >> "$FAKE_LOG"
+    case "$1" in
+        show)
+            for arg in "${@:2}"; do
+                case "$arg" in
+                    -*) ;;
+                    *) [[ " ${FAKE_INSTALLED:-} " == *" $arg "* ]]
+                       exit ;;
+                esac
+            done ;;
+        wheel)
+            [ "${FAKE_FAIL:-}" = build ] && { echo "error: build broke" >&2; exit 1; }
+            exit 0 ;;
+        install)
+            if [[ " $* " == *" --dry-run "* ]]; then
+                [ "${FAKE_FAIL:-}" = resolve ] && exit 1
+                echo "Would install verbal-code-0.1.0"
+                exit 0
+            fi
+            pid_file="$FAKE_LOG.app-pid"
+            if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                echo "app running during install" >> "$FAKE_LOG"
+            fi
+            touch "$venv/deployed-marker"
+            [ "${FAKE_FAIL:-}" = deploy ] && exit 1
+            exit 0 ;;
+    esac
+    exit 0
+fi
+if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code ]; then
+    case "${3:-}" in
+        --version)
+            [ "${FAKE_FAIL:-}" = health ] && exit 1
+            echo "Verbal Code 0.1.0"; exit 0 ;;
+        --list-models) echo "parakeet nemo-parakeet-tdt-0.6b-v2"; exit 0 ;;
+        "")
+            echo $$ > "$FAKE_LOG.app-pid"
+            trap 'exit 0' TERM
+            while :; do sleep 0.05; done ;;
+    esac
+    exit 0
+fi
+exec python3 "$@"
+"""
+
+# An "old" launcher that really starts the stub app, for restart tests.
+LIVE_LAUNCHER = (
+    "#!/usr/bin/env bash\n"
+    'exec "$HOME/.local/share/verbal-code/venv/bin/python" -m verbal_code "$@"\n'
+)
+
+# System tools the scripts call that must not touch the real machine.
+FAKE_TOOLS = {
+    "dpkg": "exit 0",  # every system package "installed"
+    "apt-cache": "exit 0",
+    "sudo": 'echo "sudo must not run in tests: $*" >&2; exit 1',
+    "gtk-update-icon-cache": "exit 0",
+    "update-desktop-database": "exit 0",
+}
+
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd,
+        env={**os.environ, **GIT_ENV},
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _write_exe(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def _digest_tree(root: Path) -> dict[str, str]:
+    return {
+        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
+
+
+class Sandbox:
+    def __init__(self, tmp: Path) -> None:
+        self.tmp = tmp
+        self.home = tmp / "home"
+        self.repo = tmp / "repo"
+        self.log = tmp / "calls.log"
+        self.venv = self.home / ".local/share/verbal-code/venv"
+        self.config_dir = self.home / ".config/verbal-code"
+        self.launcher = self.home / ".local/bin/verbal-code"
+        self.stamp = self.home / ".local/share/verbal-code/installed-version"
+        self.backup = self.home / ".local/share/verbal-code/update-backup"
+        self.fakebin = tmp / "fakebin"
+        self.extra_env: dict[str, str] = {}
+
+        for rel in ("update.sh", "scripts/install-lib.sh", "config.yaml",
+                    "assets/verbal-code.svg", "verbal_code/__init__.py"):
+            dest = self.repo / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / rel, dest)
+        _git(self.repo, "init", "-q")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "initial")
+
+        for name, body in FAKE_TOOLS.items():
+            _write_exe(self.fakebin / name, f"#!/usr/bin/env bash\n{body}\n")
+        self.log.touch()
+
+    # ── State helpers ──
+    def install(self) -> None:
+        """An existing install: venv, old launcher, stamp and user data."""
+        _write_exe(self.venv / "bin/python", FAKE_PYTHON)
+        (self.venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        _write_exe(self.launcher, "#!/usr/bin/env bash\n# old launcher\n")
+        self.stamp.write_text("version=0.0.9\ncommit=0ldc0de\n")
+        self.config_dir.mkdir(parents=True)
+        (self.config_dir / "config.yaml").write_text(
+            "hotkey:\n  combo: [ctrl, alt]\nstt:\n  engine: parakeet\n"
+            "  model: nemo-parakeet-tdt-0.6b-v3\nlogging:\n"
+            "  file: ~/.config/verbal-code/vc-logging.log\n"
+        )
+        (self.config_dir / "dictionary.json").write_text('{"terms": ["liatrio"]}')
+        (self.config_dir / "vc-logging.log").write_text("INFO started\n")
+        sherpa = self.home / ".cache/verbal-code/sherpa-onnx/model"
+        sherpa.mkdir(parents=True)
+        (sherpa / "encoder.onnx").write_bytes(b"\x00" * 64)
+        hub = self.home / ".cache/huggingface/hub/models--istupakov--parakeet-x/blobs"
+        hub.mkdir(parents=True)
+        (hub / "weights").write_bytes(b"\x01" * 64)
+
+    def user_data(self) -> dict[str, str]:
+        return {
+            **_digest_tree(self.config_dir),
+            **_digest_tree(self.home / ".cache"),
+        }
+
+    def calls(self) -> list[str]:
+        return self.log.read_text().splitlines()
+
+    def real_installs(self) -> list[str]:
+        return [c for c in self.calls()
+                if c.startswith("pip install") and "--dry-run" not in c
+                and c != "pip install --quiet pytest ruff"]
+
+    def env(self) -> dict[str, str]:
+        return {
+            **os.environ,
+            **GIT_ENV,
+            "HOME": str(self.home),
+            "PATH": f"{self.fakebin}:{os.environ['PATH']}",
+            "FAKE_LOG": str(self.log),
+            "DISPLAY": ":test",
+            **self.extra_env,
+        }
+
+    def run(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+        self.extra_env.update(env)
+        return subprocess.run(
+            ["bash", str(self.repo / "update.sh"), *args],
+            env=self.env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    # ── The fake running app ──
+    def app_pid(self) -> int | None:
+        pid_file = Path(f"{self.log}.app-pid")
+        if not pid_file.exists():
+            return None
+        pid = int(pid_file.read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        return pid
+
+    def start_app(self) -> int:
+        subprocess.run(["setsid", "-f", str(self.venv / "bin/python"), "-m",
+                        "verbal_code"], env=self.env(), check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):
+            if (pid := self.app_pid()) is not None:
+                return pid
+            time.sleep(0.05)
+        raise AssertionError("fake app did not start")
+
+    def kill_apps(self) -> None:
+        """Kills every fake app, including one still exec'ing from the launcher."""
+        pattern = f"^bash {self.home}/.local/"
+        for _ in range(40):
+            pkill = ["pkill", "-KILL", "-f", pattern]
+            if subprocess.run(pkill, check=False).returncode:
+                return  # nothing left to kill
+            time.sleep(0.05)
+
+    def wait_for_new_app(self, old_pid: int) -> int | None:
+        for _ in range(100):
+            pid = self.app_pid()
+            if pid not in (None, old_pid):
+                return pid
+            time.sleep(0.05)
+        return None
+
+
+@pytest.fixture
+def sandbox(tmp_path: Path):
+    box = Sandbox(tmp_path)
+    yield box
+    box.kill_apps()
+
+
+def _output(result: subprocess.CompletedProcess[str]) -> str:
+    return result.stdout + result.stderr
+
+
+def test_no_install_fails_pointing_to_install_script(sandbox):
+    result = sandbox.run()
+    assert result.returncode != 0
+    assert "No Verbal Code installation found" in _output(result)
+    assert "./install.sh" in _output(result)
+    assert not sandbox.launcher.exists()
+
+
+def test_update_deploys_and_preserves_user_data(sandbox):
+    sandbox.install()
+    before = sandbox.user_data()
+    commit = _git(sandbox.repo, "rev-parse", "--short", "HEAD")
+
+    result = sandbox.run()
+
+    assert result.returncode == 0, _output(result)
+    assert sandbox.user_data() == before
+    out = _output(result)
+    assert f"0.0.9 (0ldc0de) → 0.1.0 ({commit})" in out
+    assert "User data unchanged" in out
+    # Build (a wheel, then a dry resolve) strictly before the deploy.
+    calls = sandbox.calls()
+    wheel = next(i for i, c in enumerate(calls) if c.startswith("pip wheel"))
+    install = next(i for i, c in enumerate(calls) if c in sandbox.real_installs())
+    assert wheel < install
+    assert sandbox.real_installs() == [f"pip install --quiet -e {sandbox.repo}"]
+    launcher = sandbox.launcher.read_text()
+    assert 'exec "$VENV/bin/python" -m verbal_code "$@"' in launcher
+    assert os.access(sandbox.launcher, os.X_OK)
+    assert f"commit={commit}" in sandbox.stamp.read_text()
+    assert not sandbox.backup.exists()
+
+
+def test_update_keeps_installed_extras(sandbox):
+    sandbox.install()
+    result = sandbox.run(FAKE_INSTALLED="vosk")
+    assert result.returncode == 0, _output(result)
+    assert sandbox.real_installs() == [f"pip install --quiet -e {sandbox.repo}[vosk]"]
+
+
+def test_failed_build_changes_nothing(sandbox):
+    sandbox.install()
+    before = sandbox.user_data()
+
+    result = sandbox.run(FAKE_FAIL="build")
+
+    assert result.returncode != 0
+    assert "Build failed" in _output(result)
+    assert "not changed" in _output(result)
+    assert sandbox.real_installs() == []
+    assert "old launcher" in sandbox.launcher.read_text()
+    assert "commit=0ldc0de" in sandbox.stamp.read_text()
+    assert sandbox.user_data() == before
+
+
+def test_unresolvable_dependencies_change_nothing(sandbox):
+    sandbox.install()
+    result = sandbox.run(FAKE_FAIL="resolve")
+    assert result.returncode != 0
+    assert "did not resolve" in _output(result)
+    assert sandbox.real_installs() == []
+
+
+@pytest.mark.parametrize("failure", ["deploy", "health"])
+def test_failed_deploy_rolls_back(sandbox, failure):
+    sandbox.install()
+    before = sandbox.user_data()
+
+    result = sandbox.run(FAKE_FAIL=failure)
+
+    assert result.returncode != 0
+    out = _output(result)
+    assert "rolling back" in out
+    assert "0.0.9 (0ldc0de) is installed, unchanged" in out
+    # The pip stub marks the venv before failing; the restore undoes it.
+    assert not (sandbox.venv / "deployed-marker").exists()
+    assert (sandbox.venv / "bin/python").exists()
+    assert "old launcher" in sandbox.launcher.read_text()
+    assert sandbox.stamp.read_text() == "version=0.0.9\ncommit=0ldc0de\n"
+    assert not sandbox.backup.exists()
+    assert sandbox.user_data() == before
+
+
+def test_running_app_is_stopped_then_restarted(sandbox):
+    sandbox.install()
+    _write_exe(sandbox.launcher, LIVE_LAUNCHER)
+    old_pid = sandbox.start_app()
+
+    result = sandbox.run()
+
+    assert result.returncode == 0, _output(result)
+    assert "app running during install" not in sandbox.calls()
+    assert "Verbal Code restarted" in _output(result)
+    assert sandbox.wait_for_new_app(old_pid) is not None
+
+
+def test_no_restart_leaves_the_app_stopped(sandbox):
+    sandbox.install()
+    sandbox.start_app()
+
+    result = sandbox.run("--no-restart")
+
+    assert result.returncode == 0, _output(result)
+    assert "Start Verbal Code again when ready" in _output(result)
+    assert sandbox.app_pid() is None
+
+
+def test_failed_update_restarts_the_previous_version(sandbox):
+    sandbox.install()
+    _write_exe(sandbox.launcher, LIVE_LAUNCHER)
+    old_pid = sandbox.start_app()
+
+    result = sandbox.run(FAKE_FAIL="deploy")
+
+    assert result.returncode != 0
+    assert "Verbal Code restarted" in _output(result)
+    new_pid = sandbox.wait_for_new_app(old_pid)
+    assert new_pid is not None
+    # The rollback ignores Ctrl-C while it restores; the restarted app must
+    # not inherit that and still stop on SIGTERM.
+    os.kill(new_pid, signal.SIGTERM)
+    for _ in range(40):
+        if sandbox.app_pid() is None:
+            break
+        time.sleep(0.05)
+    assert sandbox.app_pid() is None
+
+
+def test_dry_run_changes_nothing(sandbox):
+    sandbox.install()
+    before = sandbox.user_data()
+    old_pid = sandbox.start_app()
+
+    result = sandbox.run("--dry-run")
+
+    assert result.returncode == 0, _output(result)
+    out = _output(result)
+    assert "Dry run" in out
+    assert "Installed:  0.0.9 (0ldc0de)" in out
+    assert "verbal-code-0.1.0" in out
+    assert "Files to replace: launcher desktop entry icon" in out
+    assert "would be stopped, then restarted" in out
+    assert sandbox.real_installs() == []
+    assert not any(c.startswith("pip wheel") for c in sandbox.calls())
+    assert "old launcher" in sandbox.launcher.read_text()
+    assert sandbox.app_pid() == old_pid
+    assert sandbox.user_data() == before
+
+
+def test_interrupted_update_is_restored_first(sandbox):
+    sandbox.install()
+    # What a killed update leaves: a complete backup of the old venv, and a
+    # half-updated venv in place.
+    shutil.copytree(sandbox.venv, sandbox.backup / "venv", symlinks=True)
+    (sandbox.backup / "venv/old-version").touch()
+    (sandbox.backup / "files").mkdir()
+    (sandbox.venv / "half-updated").touch()
+
+    result = sandbox.run()
+
+    assert result.returncode == 0, _output(result)
+    assert "did not finish" in _output(result)
+    assert (sandbox.venv / "old-version").exists()
+    assert not (sandbox.venv / "half-updated").exists()
+    assert not sandbox.backup.exists()
+
+
+def _with_upstream(sandbox: Sandbox) -> Path:
+    """Gives the checkout an upstream with one newer commit; returns it."""
+    upstream = sandbox.tmp / "upstream.git"
+    _git(sandbox.tmp, "clone", "-q", "--bare", str(sandbox.repo), str(upstream))
+    _git(sandbox.repo, "remote", "add", "origin", str(upstream))
+    _git(sandbox.repo, "fetch", "-q", "origin")
+    _git(sandbox.repo, "branch", "-q", "--set-upstream-to=origin/main")
+    other = sandbox.tmp / "other"
+    _git(sandbox.tmp, "clone", "-q", str(upstream), str(other))
+    (other / "NEWS").write_text("new\n")
+    _git(other, "add", "NEWS")
+    _git(other, "commit", "-qm", "newer")
+    _git(other, "push", "-q", "origin", "main")
+    return other
+
+
+def test_pull_fast_forwards_before_building(sandbox):
+    sandbox.install()
+    other = _with_upstream(sandbox)
+    newest = _git(other, "rev-parse", "--short", "HEAD")
+
+    result = sandbox.run("--pull")
+
+    assert result.returncode == 0, _output(result)
+    assert _git(sandbox.repo, "rev-parse", "--short", "HEAD") == newest
+    assert f"→ 0.1.0 ({newest})" in _output(result)
+
+
+def test_failed_update_after_pull_restores_the_checkout(sandbox):
+    sandbox.install()
+    _with_upstream(sandbox)
+    before = _git(sandbox.repo, "rev-parse", "HEAD")
+
+    result = sandbox.run("--pull", FAKE_FAIL="deploy")
+
+    assert result.returncode != 0
+    assert _git(sandbox.repo, "rev-parse", "HEAD") == before
+
+
+def test_pull_refuses_uncommitted_changes(sandbox):
+    sandbox.install()
+    _with_upstream(sandbox)
+    (sandbox.repo / "config.yaml").write_text("edited: true\n")
+
+    result = sandbox.run("--pull")
+
+    assert result.returncode != 0
+    assert "uncommitted changes" in _output(result)
+    assert sandbox.real_installs() == []
+
+
+def test_ctrl_c_during_deploy_rolls_back(sandbox):
+    sandbox.install()
+    # A pip that hangs mid-install, so the update can be interrupted there.
+    stub = (sandbox.venv / "bin/python").read_text().replace(
+        '[ "${FAKE_FAIL:-}" = deploy ] && exit 1',
+        '[ "${FAKE_FAIL:-}" = hang ] && { echo hung >> "$FAKE_LOG"; sleep 30; }',
+    )
+    _write_exe(sandbox.venv / "bin/python", stub)
+    sandbox.extra_env["FAKE_FAIL"] = "hang"
+    proc = subprocess.Popen(
+        ["bash", str(sandbox.repo / "update.sh")], env=sandbox.env(),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        start_new_session=True,
+    )
+    for _ in range(200):
+        if "hung" in sandbox.calls():
+            break
+        time.sleep(0.05)
+    else:
+        proc.kill()
+        raise AssertionError("update never reached the deploy")
+    os.killpg(proc.pid, signal.SIGINT)  # Ctrl-C reaches the whole group
+    out, _ = proc.communicate(timeout=60)
+
+    assert proc.returncode != 0
+    assert "rolling back" in out
+    assert not (sandbox.venv / "deployed-marker").exists()
+    assert "old launcher" in sandbox.launcher.read_text()
+    assert not sandbox.backup.exists()
