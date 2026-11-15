@@ -5,6 +5,8 @@ import subprocess
 import time
 from abc import ABC, abstractmethod
 
+from verbal_code.address_itn import looks_like_address
+
 logger = logging.getLogger("verbal_code")
 
 _SUBPROCESS_TIMEOUT = 10
@@ -318,7 +320,14 @@ _PUNCTUATION_COMMANDS: list[tuple[re.Pattern[str], str]] = [
 _DUPLICATE_PUNCTUATION = re.compile(r"(?<![.,!?;:])([.,!?;:])\1(?!\1)")
 _PUNCT_BEFORE_NEWLINE = re.compile(r"[ \t]+(\n)")
 _SPACE_AFTER_NEWLINE = re.compile(r"(\n+)[ \t]+")
-_SENTENCE_START = re.compile(r"([.!?]\s+|\n\s*)([a-z])")
+_SENTENCE_START = re.compile(r"([.!?]\s+|\n\s*)([a-z]\S*)")
+
+
+def _capitalize_sentence_start(match: re.Match[str]) -> str:
+    word = match.group(2)
+    if looks_like_address(word):
+        return match.group(0)
+    return match.group(1) + word[0].upper() + word[1:]
 
 
 def _apply_punctuation_commands(text: str) -> str:
@@ -354,9 +363,7 @@ class TextProcessor:
 
         if self._capitalize_next:
             text = self._capitalize_first_letter(text)
-        text = _SENTENCE_START.sub(
-            lambda m: m.group(1) + m.group(2).upper(), text
-        )
+        text = _SENTENCE_START.sub(_capitalize_sentence_start, text)
 
         # Carry sentence state across segments: after "…stop." the next
         # dictation should start capitalised.
@@ -368,6 +375,9 @@ class TextProcessor:
 
     @staticmethod
     def _capitalize_first_letter(text: str) -> str:
+        first_word = text.split(maxsplit=1)[0] if text.split() else ""
+        if looks_like_address(first_word):
+            return text  # ryan@liatrio.com, not Ryan@liatrio.com (MCC-189)
         for i, char in enumerate(text):
             if char.isalpha():
                 return text[:i] + char.upper() + text[i + 1 :]

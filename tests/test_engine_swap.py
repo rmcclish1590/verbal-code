@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import verbal_code.transcriber as transcriber_module
+from verbal_code.address_itn import AddressNormalizer
 from verbal_code.app import VerbalCode
 from verbal_code.dictionary import DictionaryStore
 from verbal_code.dictionary_corrector import DictionaryCorrector
@@ -305,6 +306,7 @@ def _make_dictation_app(engine, audio):
     app._max_record_seconds = 0  # no watchdog timer thread
     app._max_record_timer = None
     app._dictionary_enabled = False
+    app.address_normalizer = AddressNormalizer()
     app.dictionary_corrector = DictionaryCorrector(
         DictionaryStore(os.path.join(tempfile.mkdtemp(), "dictionary.json"))
     )
