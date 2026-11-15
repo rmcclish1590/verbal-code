@@ -16,7 +16,7 @@ import json
 import os
 import tempfile
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 
 _write_lock = threading.Lock()
@@ -37,7 +37,14 @@ class DictionaryEntry:
     """One correction. Matching is case-insensitive; ``term`` and
     ``variants`` may be single words or multi-word phrases — matching is a
     whole-string comparison, not per-token, so phrases work the same way
-    words do."""
+    words do.
+
+    ``address`` marks a domain or address term (``liatrio``, ``mcclish``).
+    Next to an address it also matches with the spaces taken out ("lia
+    trio"), and it is written lowercase and unspaced there (MCC-192).
+    Entries with ``source == "spelled"`` are candidates the app recorded
+    when a term was spelled out in an address. They start disabled.
+    """
 
     term: str
     variants: list[str] = field(default_factory=list)
@@ -45,6 +52,7 @@ class DictionaryEntry:
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
+    address: bool = False
 
     def matches(self, text: str) -> bool:
         lowered = text.lower()
@@ -73,8 +81,13 @@ class DictionaryStore:
             return
         with open(self._path) as f:
             raw = json.load(f) or {}
+        # Ignore fields this version doesn't know, so a dictionary written
+        # by a newer release still loads.
+        known = {f.name for f in fields(DictionaryEntry)}
         self._entries = {
-            entry["term"].lower(): DictionaryEntry(**entry)
+            entry["term"].lower(): DictionaryEntry(
+                **{k: v for k, v in entry.items() if k in known}
+            )
             for entry in raw.get("entries", [])
         }
 
@@ -111,6 +124,7 @@ class DictionaryStore:
         variants: list[str] | None = None,
         source: str = "manual",
         enabled: bool = True,
+        address: bool = False,
     ) -> DictionaryEntry:
         key = term.lower()
         with _write_lock:
@@ -124,6 +138,7 @@ class DictionaryStore:
                 enabled=enabled,
                 created_at=now,
                 updated_at=now,
+                address=address,
             )
             self._entries[key] = entry
             self._save()
@@ -135,6 +150,7 @@ class DictionaryStore:
         *,
         variants: list[str] | None = None,
         enabled: bool | None = None,
+        address: bool | None = None,
     ) -> DictionaryEntry:
         key = term.lower()
         with _write_lock:
@@ -145,6 +161,8 @@ class DictionaryStore:
                 entry.variants = list(variants)
             if enabled is not None:
                 entry.enabled = enabled
+            if address is not None:
+                entry.address = address
             entry.updated_at = _now()
             self._save()
             return entry

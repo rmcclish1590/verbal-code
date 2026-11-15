@@ -248,6 +248,71 @@ Manage entries from the tray menu (**Dictionary...**): search, add, edit,
 enable/disable, and delete terms. Auto-learned entries (none exist yet —
 that's future work) would show a ✨ marker.
 
+Mark a term as a **domain or address term** (`liatrio`, `mcclish`) to help
+with addresses. The dictionary runs before address conversion, so it can
+repair a domain the model split into several words before an `@` is
+written. Give the entry the split as a variant ("lee at treo"), and "ryan
+at lee at treo dot com" becomes `ryan@liatrio.com` rather than a sentence
+with two `@`s. Next to an address, address terms are tried first, also
+match with the spaces taken out ("lia trio"), and are typed lowercase and
+unspaced. Elsewhere they behave like any other term.
+
+When you spell a name inside an address, it is added as a disabled
+candidate marked 🔤 *spelled*. Tick **Enabled** to keep it, and you won't
+have to spell it again. Set `address.suggest_spelled_terms: false` to stop
+this.
+
+### Email Addresses and URLs
+
+```yaml
+address:
+  enabled: true
+  explicit: true
+  begin_phrases: ["begin address"]
+  end_phrases: ["finish address", "end address"]
+  inferred: true
+  extra_tlds: []          # more TLDs for inferred mode, e.g. ["rs"]
+  suggest_spelled_terms: true  # offer spelled names as dictionary candidates
+```
+
+Spoken addresses are typed in written form:
+
+| You say | Typed |
+|---|---|
+| ryan at example dot com | `ryan@example.com` |
+| jane dot doe at example dot co dot uk | `jane.doe@example.co.uk` |
+| www dot example dot com | `www.example.com` |
+| github dot com slash anthropics | `github.com/anthropics` |
+| https colon slash slash localhost colon eight zero eight zero | `https://localhost:8080` |
+
+There are two ways to mark an address:
+
+- **Explicit:** say **"begin address"**, the address, then **"finish address"**.
+  Only the words in between are converted. Address mode always ends with the
+  dictation, so the end phrase is optional. Inside an explicit span, "period"
+  and "point" also mean `.`, and any TLD of up to six letters is accepted.
+- **Inferred:** addresses in ordinary dictation are recognised too. To keep
+  prose intact, a match must end in a known TLD or start with a protocol.
+  Only "dot" joins the parts, punctuation ends a match, and common words are
+  never treated as part of an address. So "look at google dot com" becomes
+  `look at google.com`, not `look@google.com`. Set `inferred: false` to keep
+  only explicit mode.
+
+Names a model can't spell can be spelled out inside an address, letter by
+letter ("r y a n at example dot com") or with the phonetic alphabet ("romeo
+yankee alpha november"). "b as in bravo" pins down a letter that is easy to
+mishear, and "capital r" types an uppercase `R` for case-sensitive URL paths
+(hosts are always lowercase). Spoken digits join the run: "k two f s a" is
+`k2fsa`. A single phonetic word on its own, such as "victor at example dot
+com", is read as a name, not a letter. Spelling only applies inside an
+address, so prose such as "plan b at noon" is untouched.
+
+A span that doesn't form a valid address is typed as spoken, and the log
+records that this happened (by length only). Addresses are lowercased and
+never capitalised at the start of a sentence. Address conversion runs after
+the dictionary and before punctuation commands, so "colon" inside a URL
+becomes part of the URL rather than punctuation.
+
 ### System Tray
 
 ```yaml
@@ -294,7 +359,7 @@ second press in toggle mode) to the text being on screen, as one line:
 | `dictation_latency_ms=412` | Milliseconds from hotkey release to injection complete |
 
 The latency covers everything after release: silence trimming, transcription,
-dictionary and punctuation processing, and typing or pasting the text. With a
+dictionary, address and punctuation processing, and typing or pasting the text. With a
 live-streaming engine (sherpa or vosk and `streaming_enabled: true`) most text
 is already typed while you speak, so it measures only the final flush. A
 cycle that is skipped (audio too short, no speech) or fails to transcribe or
@@ -390,6 +455,7 @@ verbal-code/
     ├── audio.py         # Microphone capture (sounddevice)
     ├── hotkeys.py       # Global hotkey listener (pynput)
     ├── injector.py      # Text injection (xdotool/clipboard/ydotool)
+    ├── address_itn.py   # Spoken email/URL to written form (inverse text normalization)
     ├── transcriber.py   # STT engines (faster-whisper, parakeet, sherpa-onnx, moonshine, vosk)
     ├── sherpa_models.py # sherpa-onnx model download + checksum verification
     └── tray.py          # System tray indicator (GTK3, Ayatana/AppIndicator)

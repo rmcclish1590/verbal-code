@@ -11,6 +11,7 @@ import threading
 
 import numpy as np
 
+from verbal_code.address_itn import AddressNormalizer
 from verbal_code.app import VerbalCode
 from verbal_code.dictionary import DictionaryStore
 from verbal_code.dictionary_corrector import DictionaryCorrector
@@ -113,9 +114,11 @@ def _make_app(audio, transcriber, live=False):
     app._max_record_seconds = 300.0
     app._max_record_timer = None
     app._dictionary_enabled = True
-    app.dictionary_corrector = DictionaryCorrector(
-        DictionaryStore(os.path.join(tempfile.mkdtemp(), "dictionary.json"))
+    app.dictionary_store = DictionaryStore(
+        os.path.join(tempfile.mkdtemp(), "dictionary.json")
     )
+    app.dictionary_corrector = DictionaryCorrector(app.dictionary_store)
+    app.address_normalizer = AddressNormalizer(on_spelled=app._on_spelled_term)
     return app
 
 
@@ -379,3 +382,105 @@ class TestDictationLatencyLogging:
         with caplog.at_level("INFO", logger="verbal_code"):
             app._on_dictation_stop()
         assert any("dictation_latency_ms=" in r.message for r in caplog.records)
+
+
+class TestAddressPass:
+    """MCC-189: spoken addresses are written out before injection."""
+
+    def test_spoken_address_is_injected_written(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="Ryan at Liatrill.com"))
+        app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@liatrill.com "]
+
+    def test_disabled_pass_leaves_the_words(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="ryan at liatrio dot com"))
+        app.address_normalizer = None
+        app._on_dictation_stop()
+        assert app.injector.injected == ["Ryan at liatrio dot com "]
+
+    def test_colon_inside_an_address_is_not_punctuation(self):
+        app = _make_app(
+            _speech(),
+            _FakeTranscriber(text="see http colon slash slash localhost colon 8080"),
+        )
+        app._on_dictation_stop()
+        assert app.injector.injected == ["See http://localhost:8080 "]
+
+
+class TestAddressDictionaryIntegration:
+    """MCC-192: the dictionary spells the words, address ITN the structure."""
+
+    def test_dictionary_term_fixes_a_misheard_domain(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="Ryan at Liatreo.com"))
+        app.dictionary_store.add("liatrio")
+        app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@liatrio.com "]
+
+    def test_split_domain_with_a_spurious_at_is_repaired_first(self):
+        app = _make_app(
+            _speech(), _FakeTranscriber(text="ryan at lee at treo dot com")
+        )
+        app.dictionary_store.add("Liatrio", variants=["lee at treo"], address=True)
+        app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@liatrio.com "]
+
+    def test_mixed_case_term_is_lowercase_in_the_address(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="ryan at lia trio dot com"))
+        app.dictionary_store.add("LiaTrio", address=True)
+        app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@liatrio.com "]
+
+    def test_dictionary_runs_before_address_itn(self, monkeypatch):
+        app = _make_app(_speech(), _FakeTranscriber(text="x"))
+        calls = []
+        monkeypatch.setattr(
+            app, "_apply_dictionary", lambda t: calls.append("dictionary") or t
+        )
+        monkeypatch.setattr(
+            app.address_normalizer,
+            "normalize",
+            lambda t: calls.append("address") or t,
+        )
+        app._postprocess("ryan at liatrio dot com")
+        assert calls == ["dictionary", "address"]
+
+    def test_reversed_order_would_lose_the_domain(self):
+        # Why the order matters: ITN first turns the spurious "at" into "@",
+        # and the dictionary can no longer find "lee at treo".
+        store = DictionaryStore(os.path.join(tempfile.mkdtemp(), "d.json"))
+        store.add("Liatrio", variants=["lee at treo"], address=True)
+        corrector = DictionaryCorrector(store)
+        text = "ryan at lee at treo dot com"
+        itn_first = corrector.correct(AddressNormalizer().normalize(text))
+        assert "liatrio" not in itn_first.lower()
+
+    def test_spelled_term_becomes_a_disabled_candidate(self, caplog):
+        app = _make_app(
+            _speech(),
+            _FakeTranscriber(text="ryan at m c c l i s h dot com"),
+        )
+        with caplog.at_level("INFO", logger="verbal_code"):
+            app._on_dictation_stop()
+        assert app.injector.injected == ["ryan@mcclish.com "]
+        entry = app.dictionary_store.lookup("mcclish")
+        assert entry is not None
+        assert (entry.source, entry.enabled, entry.address) == (
+            "spelled",
+            False,
+            True,
+        )
+        assert "mcclish" not in caplog.text
+
+    def test_spelled_term_is_offered_once(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="m c c l i s h at x dot io"))
+        app._on_dictation_stop()
+        app._recording = True
+        app._on_dictation_stop()
+        assert [e.term for e in app.dictionary_store.entries] == ["mcclish"]
+
+    def test_existing_term_is_not_replaced_by_a_candidate(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="m c c l i s h at x dot io"))
+        app.dictionary_store.add("McClish")
+        app._on_dictation_stop()
+        entry = app.dictionary_store.lookup("mcclish")
+        assert (entry.term, entry.source, entry.enabled) == ("McClish", "manual", True)

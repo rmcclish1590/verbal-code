@@ -27,6 +27,7 @@ _KNOWN_CONFIG_SECTIONS = {
     "tray",
     "logging",
     "dictionary",
+    "address",
 }
 
 # Single source of truth for the default hotkey, matching config.yaml and README.
@@ -50,6 +51,29 @@ _STT_ENGINE_PACKAGES: dict[str, tuple[str, str]] = {
 
 # Input rates onnx-asr resamples from for Parakeet (onnx_asr.utils.SampleRates).
 _PARAKEET_SAMPLE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
+
+
+def _create_address_normalizer(config: dict, on_spelled=None):
+    """Build the address ITN pass from ``config["address"]``, or None when
+    it is disabled (MCC-188). ``on_spelled`` receives each term spelled out
+    in an address, unless ``address.suggest_spelled_terms`` is off."""
+    from verbal_code.address_itn import (
+        DEFAULT_BEGIN_PHRASES,
+        DEFAULT_END_PHRASES,
+        AddressNormalizer,
+    )
+
+    cfg = config.get("address") or {}
+    if not cfg.get("enabled", True):
+        return None
+    return AddressNormalizer(
+        explicit=cfg.get("explicit", True),
+        inferred=cfg.get("inferred", True),
+        begin_phrases=cfg.get("begin_phrases") or DEFAULT_BEGIN_PHRASES,
+        end_phrases=cfg.get("end_phrases") or DEFAULT_END_PHRASES,
+        extra_tlds=cfg.get("extra_tlds") or (),
+        on_spelled=on_spelled if cfg.get("suggest_spelled_terms", True) else None,
+    )
 
 
 def resolve_hotkey_config(config: dict) -> tuple[list[str], str]:
@@ -160,6 +184,36 @@ def validate_config(config: dict) -> None:
     if mode not in ("hold", "toggle"):
         logger.error("hotkey.mode must be 'hold' or 'toggle', got %r", mode)
         sys.exit(1)
+    _assert_address_config(config)
+
+
+_ADDRESS_BOOL_KEYS = ("enabled", "explicit", "inferred", "suggest_spelled_terms")
+_ADDRESS_LIST_KEYS = ("begin_phrases", "end_phrases", "extra_tlds")
+
+
+def _assert_address_config(config: dict) -> None:
+    """Exit when the ``address`` section has a value the normalizer can't use."""
+    section = config.get("address") or {}
+    if not isinstance(section, dict):
+        logger.error("address must be a mapping, got %r", section)
+        sys.exit(1)
+    for key in _ADDRESS_BOOL_KEYS:
+        if key in section and not isinstance(section[key], bool):
+            logger.error("address.%s must be true or false, got %r", key, section[key])
+            sys.exit(1)
+    for key in _ADDRESS_LIST_KEYS:
+        value = section.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip() for v in value
+        ):
+            logger.error("address.%s must be a list of non-empty strings", key)
+            sys.exit(1)
+    for tld in section.get("extra_tlds") or []:
+        if not tld.lstrip(".").isalpha():
+            logger.error("address.extra_tlds entries must be letters, got %r", tld)
+            sys.exit(1)
 
 
 # (section path, key, expected type, min, max) — bounds are inclusive. Values
@@ -413,6 +467,10 @@ class VerbalCode:
             fuzzy_threshold=dictionary_cfg.get(
                 "fuzzy_threshold", DEFAULT_FUZZY_THRESHOLD
             ),
+        )
+        self.address_normalizer = _create_address_normalizer(
+            config,
+            on_spelled=self._on_spelled_term if self._dictionary_enabled else None,
         )
         self.hotkey = create_hotkey_listener(
             modifiers=self._hotkey_modifiers,
@@ -733,7 +791,7 @@ class VerbalCode:
     def _inject_stream_text(self, text: str) -> None:
         """Inject one finalised stream utterance into the focused window."""
         try:
-            text = self.text_processor.process(self._apply_dictionary(text))
+            text = self._postprocess(text)
             self.injector.inject(text)
         except Exception as exc:
             logger.error("Live injection failed: %s", exc)
@@ -807,7 +865,7 @@ class VerbalCode:
             self.tray.set_state(self._TrayState.ERROR)
             return False
         if tail.strip():
-            text = self.text_processor.process(self._apply_dictionary(tail))
+            text = self._postprocess(tail)
             return self._inject_text(text)
         self.tray.set_state(self._TrayState.IDLE)
         return True
@@ -880,12 +938,42 @@ class VerbalCode:
             self.tray.set_state(self._TrayState.IDLE)
             return None
 
-        text = self.text_processor.process(self._apply_dictionary(raw))
+        text = self._postprocess(raw)
         if self._log_transcripts:
             logger.info("Transcribed: %s", text)
         else:
             logger.info("Transcribed %d chars", len(text))
         return text
+
+    def _postprocess(self, text: str) -> str:
+        """Raw transcript -> text to type. The order matters: the dictionary
+        repairs mangled words first (a domain heard as "lee at treo" would
+        otherwise give address detection a spurious "at"); address ITN then
+        turns spoken addresses into written ones before the punctuation
+        commands can read "colon" or "period" inside them (MCC-188)."""
+        text = self._apply_dictionary(text)
+        if self.address_normalizer is not None:
+            text = self.address_normalizer.normalize(text)
+        return self.text_processor.process(text)
+
+    def _on_spelled_term(self, term: str) -> None:
+        """Offer a term spelled out in an address as a dictionary candidate
+        (MCC-192). It is added disabled, with source "spelled", so it does
+        nothing until the user enables it in the Dictionary window. The
+        term is dictation, so it is never logged."""
+        if self.dictionary_store.lookup(term) is not None:
+            return
+        try:
+            self.dictionary_store.add(
+                term, source="spelled", enabled=False, address=True
+            )
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "Couldn't save a spelled dictionary candidate: %s",
+                type(exc).__name__,
+            )
+            return
+        logger.info("Added a spelled dictionary candidate (%d chars)", len(term))
 
     def _apply_dictionary(self, text: str) -> str:
         """Correct known-mangled terms before punctuation/capitalization

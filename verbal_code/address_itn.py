@@ -20,8 +20,9 @@ path if the rule set outgrows readable code.
 
 import logging
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 logger = logging.getLogger("verbal_code")
 
@@ -61,6 +62,21 @@ DIGIT_WORDS: dict[str, str] = {
     "eight": "8",
     "nine": "9",
 }
+
+# Phonetic alphabet -> letter, for spelling inside an address (MCC-191).
+# Both spellings of the variants, since engines write "Alpha", not "Alfa".
+NATO_ALPHABET: dict[str, str] = {
+    "alfa": "a", "alpha": "a", "bravo": "b", "charlie": "c", "delta": "d",
+    "echo": "e", "foxtrot": "f", "golf": "g", "hotel": "h", "india": "i",
+    "juliett": "j", "juliet": "j", "kilo": "k", "lima": "l", "mike": "m",
+    "november": "n", "oscar": "o", "papa": "p", "quebec": "q", "romeo": "r",
+    "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
+    "whiskey": "w", "whisky": "w", "x-ray": "x", "xray": "x", "yankee": "y",
+    "zulu": "z",
+}  # fmt: skip
+
+# "capital r" -> R, for case-sensitive URL paths.
+CAPITAL_WORDS: frozenset[str] = frozenset({"capital", "cap", "uppercase"})
 
 # TLDs recognised without an explicit "begin address". This list deliberately
 # leaves out TLDs that are also common English words ("in", "is", "it", "me",
@@ -135,14 +151,73 @@ def _match_multiword_symbol(tokens: Sequence[Token], i: int) -> tuple[str, int]:
     return "", 0
 
 
-def assemble(tokens: Sequence[Token]) -> str:
+_LETTER = re.compile(r"[a-z]")
+# Parakeet writes spelled letters as "R-Y-N".
+_HYPHEN_LETTERS = re.compile(r"[a-z](?:-[a-z])+")
+_DIGITS = re.compile(r"\d+")
+
+# Spelling items that show the user is spelling, as opposed to a lone NATO
+# word ("victor"), which is far likelier to be a name and stays a word.
+_SPELLING_KINDS = frozenset({"letter", "hyphen", "capital", "as_in"})
+
+
+def _spell_item(tokens: Sequence[Token], i: int) -> tuple[str, int, str] | None:
+    """One spelled item at ``i``: (written text, tokens consumed, kind)."""
+    core = tokens[i].core
+    nxt = tokens[i + 1].core if i + 1 < len(tokens) else ""
+    if core in CAPITAL_WORDS:
+        letter = nxt if _LETTER.fullmatch(nxt) else NATO_ALPHABET.get(nxt)
+        if letter:
+            return letter.upper(), 2, "capital"
+    if _LETTER.fullmatch(core):
+        window = [t.core for t in tokens[i + 1 : i + 4]]
+        if window[:2] == ["as", "in"] and window[2:] and window[2].startswith(core):
+            return core, 4, "as_in"  # "b as in bravo"
+        return core, 1, "letter"
+    if _HYPHEN_LETTERS.fullmatch(core):
+        return core.replace("-", ""), 1, "hyphen"
+    if core in NATO_ALPHABET:
+        return NATO_ALPHABET[core], 1, "nato"
+    if core in DIGIT_WORDS:
+        return DIGIT_WORDS[core], 1, "digit"
+    if _DIGITS.fullmatch(core):
+        return core, 1, "digit"
+    return None
+
+
+def _spell_run(tokens: Sequence[Token], i: int) -> list[tuple[str, int, str]]:
+    """Consecutive spelling items from ``i`` (possibly empty)."""
+    items = []
+    while i < len(tokens):
+        item = _spell_item(tokens, i)
+        if item is None:
+            break
+        items.append(item)
+        i += item[1]
+    return items
+
+
+def _is_spelling(items: list[tuple[str, int, str]]) -> bool:
+    kinds = [kind for _, _, kind in items]
+    return bool(_SPELLING_KINDS.intersection(kinds)) or kinds.count("nato") >= 2
+
+
+# A spelled run this long or longer is offered as a dictionary candidate.
+_MIN_SPELLED_TERM_LEN = 3
+
+
+def assemble(tokens: Sequence[Token], spelled: list[str] | None = None) -> str:
     """Map a span's spoken words to written form and close up the whitespace.
 
-    Symbol and digit words become their symbols. Every other word is kept
-    and lowercased, together with any internal punctuation it already has
-    (``liatrio.com``). Punctuation around a word is dropped, so the caller
-    has to decide what to do with a sentence-final period. No validation
-    happens here; see :func:`is_valid_address`.
+    Symbol and digit words become their symbols. A spelled run ("r y a n",
+    "romeo yankee alpha november", "b as in bravo", "capital r") becomes its
+    letters (MCC-191). Every other word is kept and lowercased, together
+    with any internal punctuation it already has (``liatrio.com``).
+    Punctuation around a word is dropped, so the caller has to decide what
+    to do with a sentence-final period. Only "capital" letters keep their
+    case, and never in the host. No validation happens here; see
+    :func:`is_valid_address`. Spelled runs of three or more characters
+    are appended to ``spelled`` when it is given (MCC-192).
     """
     pieces: list[str] = []
     i = 0
@@ -152,10 +227,32 @@ def assemble(tokens: Sequence[Token]) -> str:
             pieces.append(symbol)
             i += consumed
             continue
+        run = _spell_run(tokens, i)
+        if run and _is_spelling(run):
+            word = "".join(text for text, _, _ in run)
+            pieces.append(word)
+            i += sum(consumed for _, consumed, _ in run)
+            if (
+                spelled is not None
+                and len(word) >= _MIN_SPELLED_TERM_LEN
+                and not word.isdigit()
+            ):
+                spelled.append(word.lower())
+            continue
         core = tokens[i].core
         pieces.append(SYMBOL_WORDS.get(core) or DIGIT_WORDS.get(core) or core)
         i += 1
-    return _join_pieces(pieces)
+    return _lowercase_host(_join_pieces(pieces))
+
+
+def _lowercase_host(candidate: str) -> str:
+    """Hosts are case-insensitive, so a spelled capital never reaches one."""
+    if "@" in candidate:
+        local, _, domain = candidate.rpartition("@")
+        return f"{local}@{domain.lower()}"
+    match = re.match(r"([A-Za-z]+://)?([^/?#]*)", candidate)
+    assert match is not None  # both groups can match empty
+    return match.group(0).lower() + candidate[match.end() :]
 
 
 def _join_pieces(pieces: list[str]) -> str:
@@ -226,18 +323,411 @@ def is_valid_address(candidate: str, tlds: Iterable[str] | None = None) -> bool:
     return is_valid_url(candidate, tlds)
 
 
-def convert_span(text: str, tlds: Iterable[str] | None = None) -> str | None:
+def convert_span(
+    text: str,
+    tlds: Iterable[str] | None = None,
+    spelled: list[str] | None = None,
+) -> str | None:
     """Convert a spoken address span to written form.
 
     Returns None when the result isn't a valid address, so the caller can
     leave the span as spoken text instead of typing something malformed.
     The failure is logged by length only, because span text is dictation.
     """
-    candidate = assemble(tokenize(text))
+    runs: list[str] = []
+    candidate = assemble(tokenize(text), runs)
     if is_valid_address(candidate, tlds):
+        if spelled is not None:
+            spelled.extend(runs)
         return candidate
     logger.info(
         "Address span failed validation; leaving it as spoken text (%d chars)",
         len(text),
     )
     return None
+
+
+def looks_like_address(word: str) -> bool:
+    """True when ``word`` (one whitespace-free token) is a written address.
+
+    The sentence capitaliser uses this so that ``ryan@liatrio.com`` at the
+    start of a dictation isn't typed as ``Ryan@liatrio.com``.
+    """
+    core = word.strip(_LEADING_PUNCT + _TRAILING_PUNCT)
+    if not core or core != core.lower():
+        return False
+    return "://" in core or is_valid_address(core)
+
+
+# --- Boundary detection (MCC-189) -------------------------------------------
+#
+# Two modes decide which part of a transcript is an address:
+#
+# * Explicit: "begin address ... finish address" (or the end of the
+#   dictation). Everything in between is converted; nothing outside it is.
+# * Inferred: spans are recognised in ordinary dictation. This is deliberately
+#   narrow, because mangling prose is worse than missing an address. A span
+#   must end in a known TLD (or start with a protocol), "dot" is the only dot
+#   word that can join labels ("point" and "period" are too common in prose),
+#   punctuation ends a span, and common function words never become a local
+#   part or domain label ("look at google dot com" is not look@google.com).
+
+# Words that never form a local part, domain label or path segment on their
+# own in inferred mode.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # pronouns and determiners
+        "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his",
+        "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they",
+        "them", "their", "this", "that", "these", "those", "who", "whom",
+        "whose", "which", "what", "a", "an", "the", "some", "any", "all",
+        "each", "every", "no", "one",
+        # prepositions and conjunctions
+        "at", "in", "on", "of", "to", "for", "from", "with", "by", "about",
+        "into", "onto", "over", "under", "near", "around", "after", "before",
+        "than", "via", "per", "and", "or", "but", "so", "if", "then",
+        "because", "while", "when", "where", "until", "as",
+        # auxiliaries and common adverbs
+        "is", "am", "are", "was", "were", "be", "been", "being", "do", "does",
+        "did", "have", "has", "had", "will", "would", "can", "could",
+        "should", "may", "might", "must", "shall", "not", "yes", "here",
+        "there", "now", "just", "also", "very", "still", "only", "even",
+        "good", "bad", "great", "least", "most", "best", "once", "first",
+        "last", "home",
+    }
+)  # fmt: skip
+
+# Verbs that commonly come right before "at" ("look at", "arrive at").
+_AT_VERBS = (
+    "look", "stare", "glance", "point", "aim", "arrive", "meet", "work",
+    "live", "stay", "wait", "land", "start", "stop", "end", "begin",
+    "finish", "laugh", "smile", "wave", "shout", "yell", "throw", "shop",
+    "eat", "study", "play", "park", "sit", "stand", "call", "email",
+    "text", "reach", "find", "see", "visit",
+)  # fmt: skip
+_AT_VERB_IRREGULAR = (
+    "met", "sat", "stood", "ate", "began", "begun", "found", "saw", "seen",
+    "threw", "thrown",
+)  # fmt: skip
+_STOPWORDS |= frozenset(
+    form
+    for verb in _AT_VERBS
+    for form in (verb, verb + "s", verb + "ed", verb + "d", verb + "ing")
+) | frozenset(_AT_VERB_IRREGULAR)
+
+# Which spoken symbols may join units inside each part of an inferred span.
+_LOCAL_JOINERS = frozenset({"dot", "underscore", "dash", "hyphen", "plus"})
+_HOST_JOINERS = frozenset({"dot", "dash", "hyphen"})
+_PATH_JOINERS = frozenset({"dot", "dash", "hyphen", "underscore"})
+_PROTOCOL_WORDS = frozenset({"http", "https", "ftp"})
+
+# One already-written chunk of an address: a word, "liatrio.com", "k2-fsa".
+_WORD_UNIT = re.compile(r"[a-z0-9](?:[a-z0-9._%+-]*[a-z0-9])?")
+
+DEFAULT_BEGIN_PHRASES = ("begin address",)
+DEFAULT_END_PHRASES = ("finish address", "end address")
+
+# Within an open explicit span, an end phrase matches at this difflib ratio
+# or better. Parakeet hears "end address" as "and address".
+_END_PHRASE_RATIO = 0.8
+
+
+class _InferredParser:
+    """Recognises address spans in one token list. Each ``_match_*`` method
+    returns the exclusive end index of a span starting at ``i``, or None."""
+
+    def __init__(self, tokens: Sequence[Token], tlds: frozenset[str]):
+        self.tokens = tokens
+        self.tlds = tlds
+
+    # A span can't run past punctuation ("com, and") and can't absorb a word
+    # with leading punctuation, except as its first token.
+    def _can_extend(self, p: int) -> bool:
+        return 0 < p < len(self.tokens) and self._no_break_before(p)
+
+    def _is(self, p: int, *words: str) -> bool:
+        return self._can_extend(p) and self.tokens[p].core in words
+
+    def _is_digit(self, p: int) -> bool:
+        core = self.tokens[p].core
+        return core in DIGIT_WORDS or _DIGITS.fullmatch(core) is not None
+
+    def _no_break_before(self, q: int) -> bool:
+        """No punctuation between tokens ``q - 1`` and ``q``, except the
+        period an engine puts after a spelled letter ("R. Y. A. N.")."""
+        prev, tok = self.tokens[q - 1], self.tokens[q]
+        if tok.lead:
+            return False
+        lettered = prev.trail == "." and _LETTER.fullmatch(prev.core) is not None
+        return not prev.trail or lettered
+
+    def _spelled_unit(self, p: int) -> int | None:
+        """End of a spelled run at ``p`` ("r y a n", "k two f s a"), if any."""
+        tokens = self.tokens
+        items: list[tuple[str, int, str]] = []
+        q = p
+        while q < len(tokens):
+            if q > p and not self._no_break_before(q):
+                break
+            item = _spell_item(tokens, q)
+            if item is None or any(
+                tokens[k].trail or tokens[k + 1].lead for k in range(q, q + item[1] - 1)
+            ):
+                break
+            items.append(item)
+            q += item[1]
+        if not items or not _is_spelling(items):
+            return None
+        if len(items) == 1 and tokens[p].core in ("a", "i"):
+            return None  # the words "a" and "I", not spelling
+        return q
+
+    def _unit(self, p: int, first: bool = False) -> int | None:
+        """End of the unit at ``p``: a spelled run, a run of digits, or one
+        plain word."""
+        if not first and not self._can_extend(p):
+            return None
+        if p >= len(self.tokens):
+            return None
+        spelled = self._spelled_unit(p)
+        if spelled is not None:
+            return spelled
+        if self._is_digit(p):
+            end = p + 1
+            while self._can_extend(end) and self._is_digit(end):
+                end += 1
+            return end
+        core = self.tokens[p].core
+        if (
+            core in SYMBOL_WORDS
+            or core in _STOPWORDS
+            or _WORD_UNIT.fullmatch(core) is None
+        ):
+            return None
+        return p + 1
+
+    def _chain(self, p: int, joiners: frozenset[str], first: bool) -> list[int]:
+        """Units joined by ``joiners``. Returns the end after each unit."""
+        end = self._unit(p, first=first)
+        ends: list[int] = []
+        while end is not None:
+            ends.append(end)
+            if not self._is(end, *joiners):
+                break
+            end = self._unit(end + 1)
+        return ends
+
+    def _host(self, p: int, first: bool, has_scheme: bool) -> int | None:
+        """Longest chain from ``p`` that assembles to a valid host."""
+        tlds = None if has_scheme else self.tlds
+        for end in reversed(self._chain(p, _HOST_JOINERS, first)):
+            host = assemble(self.tokens[p:end])
+            # Without a protocol, an all-digit label is far likelier to be a
+            # number in a sentence ("two dot com companies") than a domain.
+            if not has_scheme and any(label.isdigit() for label in host.split(".")):
+                continue
+            if _host_ok(host, tlds, has_scheme):
+                return end
+        return None
+
+    def _path(self, p: int) -> int:
+        """Optional ":port" and "/segment" parts after a host."""
+        if self._is(p, "colon") and self._can_extend(p + 1) and self._is_digit(p + 1):
+            p = self._unit(p + 1) or p
+        while self._is(p, "slash"):
+            p += 1
+            ends = self._chain(p, _PATH_JOINERS, first=False)
+            if ends:
+                p = ends[-1]
+        return p
+
+    def _word_at(self, i: int) -> tuple[str, int]:
+        """The written word at ``i`` and its end, joining a spelled run
+        ("h t t p s" -> "https", "w w w" -> "www")."""
+        spelled = self._spelled_unit(i)
+        if spelled is not None:
+            return assemble(self.tokens[i:spelled]), spelled
+        return self.tokens[i].core, i + 1
+
+    def _match_protocol(self, i: int) -> int | None:
+        word, p = self._word_at(i)
+        if word not in _PROTOCOL_WORDS:
+            return None
+        for word in ("colon", "slash", "slash"):
+            if not self._is(p, word):
+                return None
+            p += 1
+        end = self._host(p, first=False, has_scheme=True)
+        return self._path(end) if end is not None else None
+
+    def _match_www(self, i: int) -> int | None:
+        word, p = self._word_at(i)
+        if word != "www":
+            return None
+        if self._is(p, "dot"):
+            p += 1
+        end = self._host(p, first=False, has_scheme=False)
+        return self._path(end) if end is not None else None
+
+    def _match_email(self, i: int) -> int | None:
+        ends = self._chain(i, _LOCAL_JOINERS, first=True)
+        if not ends or not self._is(ends[-1], "at"):
+            return None
+        return self._host(ends[-1] + 1, first=False, has_scheme=False)
+
+    def _match_bare(self, i: int) -> int | None:
+        end = self._host(i, first=True, has_scheme=False)
+        return self._path(end) if end is not None else None
+
+    def spans(self) -> list[tuple[int, int]]:
+        found = []
+        i = 0
+        matchers = (
+            self._match_protocol,
+            self._match_www,
+            self._match_email,
+            self._match_bare,
+        )
+        while i < len(self.tokens):
+            for match in matchers:
+                end = match(i)
+                if end is not None:
+                    found.append((i, end))
+                    i = end
+                    break
+            else:
+                i += 1
+        return found
+
+
+def _phrase_words(phrases: Iterable[str]) -> list[tuple[str, ...]]:
+    return [tuple(p.lower().split()) for p in phrases if p.split()]
+
+
+class AddressNormalizer:
+    """Converts the email addresses and URLs in a transcript to written form.
+
+    Runs after the dictionary pass (so a domain the model split up is
+    repaired first) and before ``TextProcessor`` (so "colon" and "period"
+    inside an address become symbols rather than punctuation).
+    """
+
+    def __init__(
+        self,
+        explicit: bool = True,
+        inferred: bool = True,
+        begin_phrases: Iterable[str] = DEFAULT_BEGIN_PHRASES,
+        end_phrases: Iterable[str] = DEFAULT_END_PHRASES,
+        extra_tlds: Iterable[str] = (),
+        on_spelled: Callable[[str], None] | None = None,
+    ) -> None:
+        """``on_spelled`` is called with each term spelled out in a converted
+        address, so the app can offer it as a dictionary candidate."""
+        self.explicit = explicit
+        self._on_spelled = on_spelled
+        self.inferred = inferred
+        self._begin = _phrase_words(begin_phrases)
+        self._end = _phrase_words(end_phrases)
+        self._tlds = KNOWN_TLDS | {t.lower().lstrip(".") for t in extra_tlds}
+
+    def normalize(self, text: str) -> str:
+        if not text or not (self.explicit or self.inferred):
+            return text
+        spelled: list[str] = []
+        pieces = (
+            self._explicit_pass(text, spelled) if self.explicit else [(text, False)]
+        )
+        if self.inferred:
+            pieces = [
+                (piece if done else self._inferred_pass(piece, spelled), done)
+                for piece, done in pieces
+            ]
+        self._report_spelled(spelled)
+        return "".join(piece for piece, _ in pieces)
+
+    def _report_spelled(self, spelled: list[str]) -> None:
+        if self._on_spelled is None:
+            return
+        for term in dict.fromkeys(spelled):  # dedupe, keep order
+            try:
+                self._on_spelled(term)
+            except Exception as exc:  # never lose the dictation over this
+                logger.warning("Spelled-term callback failed: %s", type(exc).__name__)
+
+    # -- explicit mode --
+
+    def _match_phrase(
+        self, tokens: Sequence[Token], i: int, phrases: list[tuple[str, ...]],
+        fuzzy: bool,
+    ) -> int:
+        """Token count of the phrase starting at ``i``, or 0."""
+        for words in phrases:
+            window = tuple(t.core for t in tokens[i : i + len(words)])
+            if len(window) != len(words):
+                continue
+            if window == words:
+                return len(words)
+            if fuzzy:
+                ratio = SequenceMatcher(None, " ".join(window), " ".join(words)).ratio()
+                if ratio >= _END_PHRASE_RATIO:
+                    return len(words)
+        return 0
+
+    def _explicit_pass(self, text: str, spelled: list[str]) -> list[tuple[str, bool]]:
+        """Split ``text`` into (piece, converted) pairs. Converted pieces are
+        explicit-mode output that inferred mode must not touch again."""
+        tokens = tokenize(text)
+        pieces: list[tuple[str, bool]] = []
+        cursor = 0
+        i = 0
+        while i < len(tokens):
+            begin_len = self._match_phrase(tokens, i, self._begin, fuzzy=False)
+            if not begin_len:
+                i += 1
+                continue
+            start = i + begin_len
+            stop = start
+            end_len = 0
+            while stop < len(tokens):
+                end_len = self._match_phrase(tokens, stop, self._end, fuzzy=True)
+                if end_len:
+                    break
+                stop += 1
+            span = tokens[start:stop]
+            # The replacement runs from the trigger to the terminator (or the
+            # last spoken token), keeping the punctuation that follows it.
+            last = tokens[stop + end_len - 1] if end_len else tokens[stop - 1]
+            region_end = last.core_end
+            pieces.append((text[cursor : tokens[i].start + len(tokens[i].lead)], False))
+            if span:
+                spoken = text[span[0].start : span[-1].core_end]
+                converted = convert_span(spoken, spelled=spelled)
+                pieces.append((converted if converted is not None else spoken, True))
+            elif not last.trail and region_end < len(text) and text[region_end] == " ":
+                region_end += 1  # don't leave a double space behind
+            cursor = region_end
+            i = stop + end_len
+            logger.debug("Explicit address span: %d tokens", len(span))
+        pieces.append((text[cursor:], False))
+        return pieces
+
+    # -- inferred mode --
+
+    def _inferred_pass(self, text: str, spelled: list[str]) -> str:
+        tokens = tokenize(text)
+        out = []
+        cursor = 0
+        for i, end in _InferredParser(tokens, self._tlds).spans():
+            first, last = tokens[i], tokens[end - 1]
+            runs: list[str] = []
+            candidate = assemble(tokens[i:end], runs)
+            region_start = first.start + len(first.lead)
+            original = text[region_start : last.core_end]
+            if candidate == original or not is_valid_address(candidate, None):
+                continue
+            spelled.extend(runs)
+            out.append(text[cursor:region_start])
+            out.append(candidate)
+            cursor = last.core_end
+        out.append(text[cursor:])
+        return "".join(out)

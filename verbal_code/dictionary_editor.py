@@ -4,10 +4,11 @@ Modeled on the "Hotkeys..." tray window (`hotkey_editor.py`): a lazily
 constructed GTK window opened from the tray menu, backed directly by the
 MCC-54 `DictionaryStore` for persistence.
 
-Auto-learned entries are marked visually, but there is no review queue for
-pending candidates here — nothing produces "pending" candidates yet (that's
-MCC-56, deliberately deferred; see its own recommendation to wait for usage
-data first). Every entry surfaced by this window is already active.
+Auto-learned entries are marked visually. There is no separate review queue
+for candidates (MCC-56 was deferred). The one source of candidates is a term
+the user spelled out in an address (MCC-192): it is listed with a "spelled"
+source and stays disabled until the user ticks Enabled. The Address column
+marks domain/address terms, which match more loosely next to an address.
 Renaming a term isn't supported (the term is the store's identity/key);
 editing changes variants and the enabled flag.
 """
@@ -21,11 +22,14 @@ from verbal_code.dictionary import DictionaryEntry, DictionaryStore
 logger = logging.getLogger("verbal_code")
 
 _AUTO_LEARNED_MARKER = "✨"  # matches Wispr Flow's indicator
+_SPELLED_MARKER = "🔤"
 
 
 def _source_label(entry: DictionaryEntry) -> str:
     if entry.source == "auto-learned":
         return f"{_AUTO_LEARNED_MARKER} auto-learned"
+    if entry.source == "spelled":
+        return f"{_SPELLED_MARKER} spelled (candidate)"
     return entry.source
 
 
@@ -76,7 +80,7 @@ class DictionaryEditorWindow:
         self._search_entry.connect("search-changed", self._on_search_changed)
         vbox.pack_start(self._search_entry, False, False, 0)
 
-        self._list_store = gtk.ListStore(str, str, str, bool)
+        self._list_store = gtk.ListStore(str, str, str, bool, bool)
         self._tree = gtk.TreeView(model=self._list_store)
         self._tree.set_headers_clickable(True)
 
@@ -97,6 +101,12 @@ class DictionaryEditorWindow:
         enabled_col = gtk.TreeViewColumn("Enabled", enabled_renderer, active=3)
         enabled_col.set_sort_column_id(3)
         self._tree.append_column(enabled_col)
+
+        address_col = gtk.TreeViewColumn(
+            "Address", gtk.CellRendererToggle(), active=4
+        )
+        address_col.set_sort_column_id(4)
+        self._tree.append_column(address_col)
 
         scroller = gtk.ScrolledWindow()
         scroller.set_policy(gtk.PolicyType.NEVER, gtk.PolicyType.AUTOMATIC)
@@ -140,6 +150,7 @@ class DictionaryEditorWindow:
                     _format_variants(entry.variants),
                     _source_label(entry),
                     entry.enabled,
+                    entry.address,
                 ]
             )
 
@@ -228,6 +239,14 @@ class DictionaryEditorWindow:
         enabled_check.set_active(entry.enabled if entry is not None else True)
         grid.attach(enabled_check, 1, 2, 1, 1)
 
+        address_check = gtk.CheckButton(label="Domain or address term")
+        address_check.set_tooltip_text(
+            "Also matches with spaces removed next to an address "
+            '("lia trio" -> liatrio), and is typed lowercase there.'
+        )
+        address_check.set_active(entry.address if entry is not None else False)
+        grid.attach(address_check, 1, 3, 1, 1)
+
         dialog.show_all()
         response = dialog.run()
         if response == gtk.ResponseType.OK:
@@ -236,6 +255,7 @@ class DictionaryEditorWindow:
                 term_entry.get_text().strip(),
                 _parse_variants(variants_entry.get_text()),
                 enabled_check.get_active(),
+                address_check.get_active(),
             )
         dialog.destroy()
         self._refresh()
@@ -246,13 +266,18 @@ class DictionaryEditorWindow:
         term: str,
         variants: list[str],
         enabled: bool,
+        address: bool = False,
     ) -> None:
         if not term:
             return
         try:
             if existing is None:
-                self._store.add(term, variants=variants, enabled=enabled)
+                self._store.add(
+                    term, variants=variants, enabled=enabled, address=address
+                )
             else:
-                self._store.update(existing.term, variants=variants, enabled=enabled)
+                self._store.update(
+                    existing.term, variants=variants, enabled=enabled, address=address
+                )
         except (ValueError, KeyError) as exc:
             logger.error("Dictionary entry save failed: %s", exc)
