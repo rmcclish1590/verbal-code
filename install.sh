@@ -85,7 +85,11 @@ ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 # No prompt: detection picks the backend; VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu
 # overrides it. A machine without a GPU sees nothing new here.
 detect_gpu_backend
-mapfile -t GPU_DESCRIPTION < <(cd / && "$PYTHON" -m verbal_code.ct2_backend describe 2>/dev/null || true)
+describe_gpu() {
+    cd / || return 0
+    "$PYTHON" -m verbal_code.ct2_backend describe 2>/dev/null || true
+}
+mapfile -t GPU_DESCRIPTION < <(describe_gpu)
 if [ "$GPU_BACKEND" != cpu ]; then
     ok "${GPU_DESCRIPTION[0]:-GPU found}"
 elif [ -n "${GPU_DESCRIPTION[1]:-}" ]; then
