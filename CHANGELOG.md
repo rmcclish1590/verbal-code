@@ -92,6 +92,13 @@ below as MCC-NN).
   library with its status and package, then the fix commands. When
   `import ctranslate2` still fails on a missing library, the warning
   names the library and its package (MCC-201).
+- README "GPU acceleration" section: supported AMD and NVIDIA hardware,
+  requirements (including the hipBLAS, hipRAND and rocRAND packages ROCm's
+  runtime package doesn't ship, and the `sudo ldconfig` step), how to verify it with `--doctor`, the config
+  options, how to force the CPU, and fixes for the common problems:
+  Ollama holding VRAM, a pip upgrade replacing the ROCm build, allocator
+  and multi-GPU settings. The repo now runs CI (pytest, ruff, `bash -n`,
+  shellcheck) on Python 3.10 and 3.12 (MCC-199).
 
 ### Security
 
@@ -120,6 +127,10 @@ below as MCC-NN).
 - A non-interactive `./uninstall.sh` without `--force` used to exit at
   the first prompt with no explanation. It now says to use `--force`, and
   still changes nothing (MCC-200).
+- Verbal Code failed to start on Python 3.10, the oldest supported
+  version and Ubuntu 22.04's default: the dictionary module imported
+  `datetime.UTC`, which only exists from Python 3.11. Found by the new CI
+  (MCC-199).
 
 - Fuzzy dictionary matching no longer swallows a neighbouring word. With a
   multi-word variant in the dictionary, "at liatrio" was close enough to

@@ -18,7 +18,7 @@ import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field, fields
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("verbal_code")
 
@@ -32,7 +32,9 @@ def default_dictionary_path() -> str:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    # timezone.utc, not datetime.UTC: that alias needs Python 3.11 and
+    # the project supports 3.10.
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
