@@ -22,6 +22,26 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
 fi
 ok "Python $PY_VERSION"
 
+# ── Existing dictionary (MCC-200) ──
+# Checked before anything is written. An existing dictionary is left
+# exactly as it is and used; install never creates, resets or rewrites
+# it. An unreadable one is reported, not repaired, and doesn't stop the
+# install (the app then runs without it until it's fixed).
+DICT_PATH=$(dictionary_path)
+inspect_dictionary "$DICT_PATH"
+case "$DICT_STATE" in
+    ok)
+        DICT_NOTE="$(describe_dictionary "$DICT_PATH")"
+        ok "Existing dictionary found: $DICT_NOTE; it will be kept and used"
+        ;;
+    invalid)
+        DICT_NOTE="${DICT_PATH/#$HOME/\~} could not be read ($DICT_PROBLEM)"
+        warn "Existing dictionary $DICT_NOTE. It was left untouched;"
+        warn "Verbal Code runs without it until you fix or delete the file."
+        ;;
+    *) DICT_NOTE="" ;;
+esac
+
 # ── System dependencies (APT_PACKAGES in scripts/install-lib.sh) ──
 add_indicator_package
 install_missing_apt_packages
@@ -108,10 +128,6 @@ if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
     ok "Config file created"
 else
     ok "Config file already exists at $CONFIG_DIR/config.yaml"
-fi
-# uninstall.sh keeps the dictionary (MCC-128); a reinstall reuses it as-is.
-if [ -f "$CONFIG_DIR/dictionary.json" ]; then
-    ok "Existing dictionary found at $CONFIG_DIR/dictionary.json; it will be used"
 fi
 
 # ── Speech model ──
@@ -220,6 +236,11 @@ info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"
 info "Update:  ./update.sh (keeps your config, dictionary and models)"
 info "Config:  $CONFIG_DIR/config.yaml"
+if [ "$DICT_STATE" = ok ]; then
+    info "Dictionary: $DICT_NOTE (in use)"
+elif [ "$DICT_STATE" = invalid ]; then
+    warn "Dictionary: $DICT_NOTE; not in use until fixed"
+fi
 info "Switch models any time from the tray's Model menu (new ones download on first use)."
 echo ""
 

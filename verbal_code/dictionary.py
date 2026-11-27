@@ -13,11 +13,14 @@ reason as ``config_store``.
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
+
+logger = logging.getLogger("verbal_code")
 
 _write_lock = threading.Lock()
 
@@ -73,23 +76,39 @@ class DictionaryStore:
     def __init__(self, path: str | None = None):
         self._path = os.path.expanduser(path or default_dictionary_path())
         self._entries: dict[str, DictionaryEntry] = {}
+        #: Why the file on disk couldn't be read, or None. While set the
+        #: store is empty and refuses to save, so the user's file is never
+        #: overwritten (MCC-200).
+        self.load_error: str | None = None
         self._load()
 
     def _load(self) -> None:
         if not os.path.isfile(self._path):
             self._entries = {}
             return
-        with open(self._path) as f:
-            raw = json.load(f) or {}
-        # Ignore fields this version doesn't know, so a dictionary written
-        # by a newer release still loads.
-        known = {f.name for f in fields(DictionaryEntry)}
-        self._entries = {
-            entry["term"].lower(): DictionaryEntry(
-                **{k: v for k, v in entry.items() if k in known}
+        try:
+            with open(self._path) as f:
+                raw = json.load(f) or {}
+            # Ignore fields this version doesn't know, so a dictionary
+            # written by a newer release still loads.
+            known = {f.name for f in fields(DictionaryEntry)}
+            self._entries = {
+                entry["term"].lower(): DictionaryEntry(
+                    **{k: v for k, v in entry.items() if k in known}
+                )
+                for entry in raw.get("entries", [])
+            }
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # A corrupt dictionary must not keep the app from starting.
+            # The error type only: the message could quote dictated terms.
+            self._entries = {}
+            self.load_error = type(exc).__name__
+            logger.warning(
+                "Dictionary %s could not be read (%s); running without it and "
+                "leaving the file untouched. Fix or delete it, then restart.",
+                self._path,
+                self.load_error,
             )
-            for entry in raw.get("entries", [])
-        }
 
     def _save(self) -> None:
         directory = os.path.dirname(self._path) or "."
@@ -128,6 +147,11 @@ class DictionaryStore:
     ) -> DictionaryEntry:
         key = term.lower()
         with _write_lock:
+            if self.load_error is not None:
+                raise ValueError(
+                    f"{self._path} could not be read ({self.load_error}); "
+                    "fix or delete it before adding terms"
+                )
             if key in self._entries:
                 raise ValueError(f"dictionary already has a term for {term!r}")
             now = _now()
