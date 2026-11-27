@@ -110,7 +110,9 @@ fi
 gtk-update-icon-cache -f -t "$ICON_THEME_DIR" 2>/dev/null || true
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
-# ── Remove venv (and update.sh's version stamp and any leftover backup) ──
+# ── Remove venv (and the version stamp with its GPU backend marker, the
+# ROCm CTranslate2 wheel cache and any leftover update backup: all under
+# $VC_DATA_DIR) ──
 if [ -d "$VC_DATA_DIR" ]; then
     rm -rf "$VC_DATA_DIR"
     ok "Removed venv: ~/.local/share/verbal-code/"

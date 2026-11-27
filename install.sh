@@ -199,6 +199,10 @@ fi
 # ── Done ──
 echo ""
 ok "Verbal Code $(read_stamp version) ($(read_stamp commit)) installed successfully!"
+VERDICT=$(doctor_verdict)
+if [ -n "$VERDICT" ]; then
+    info "GPU: $VERDICT (details: verbal-code --doctor)"
+fi
 echo ""
 info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"

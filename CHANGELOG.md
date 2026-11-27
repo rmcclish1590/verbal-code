@@ -32,6 +32,15 @@ below as MCC-NN).
   no new prompt; set `VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu` to override
   the detection. `verbal-code --doctor --fix` reruns the same step later,
   for example after a pip upgrade replaced the ROCm build (MCC-195).
+- `./update.sh` keeps the GPU backend: when the deploy's pip run replaced
+  the ROCm build of CTranslate2 (or the pin moved), it reinstalls the
+  pinned wheel from the local cache before the health check. If that
+  fails, the whole update rolls back, so an update never silently drops
+  you to CPU. `--dry-run` shows the backend plan (keep / reinstall ROCm
+  wheel / none). A GPU added since the install is offered in the
+  summary, never switched to. `install.sh` and `update.sh` end with the
+  doctor's one-line GPU verdict. `uninstall.sh` removes the wheel cache
+  and the backend marker (MCC-196).
 
 ### Security
 

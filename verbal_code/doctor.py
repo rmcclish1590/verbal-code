@@ -115,7 +115,7 @@ def verdict(
         if report.vendor == "none" and not expects_gpu:
             return Verdict(False, "CPU (no GPU)", code)
         reason = report.runtime_detail
-        fix = report.hint or "see README → GPU acceleration"
+        fix = report.fix or "see README → GPU acceleration"
     elif flavor == "missing":
         reason = "ctranslate2 is not installed"
         fix = "./install.sh"

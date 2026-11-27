@@ -109,8 +109,10 @@ class GpuReport:
     # the dynamic linker cache: the launcher must then add it to
     # LD_LIBRARY_PATH (MCC-198).
     needs_ld_library_path: bool = False
-    # One actionable line when a GPU exists but can't be used.
+    # One actionable line when a GPU exists but can't be used, and its fix
+    # alone (a command or a pointer) for --doctor's verdict.
     hint: str = ""
+    fix: str = ""
 
     def machine_line(self, python: str | None = None) -> str:
         """``backend=rocm gfx=gfx1200 index=0 python=cp312 ld_path=0``: the
@@ -147,6 +149,11 @@ class _VendorResult:
     chosen: GpuDevice | None = None
     needs_ld_library_path: bool = False
     hint: str = ""
+    fix: str = ""
+
+
+_README_FIX = "see README → GPU acceleration"
+_ROCM_FIX = "install ROCm 7.2+ (" + _README_FIX + ")"
 
 
 # ── Small helpers ──
@@ -273,8 +280,8 @@ def _detect_amd(
         )
     devices = list(by_address.values())
 
-    def failed(detail: str, hint: str = "") -> _VendorResult:
-        return _VendorResult(devices, False, detail, hint=hint or (
+    def failed(detail: str, fix: str = _ROCM_FIX, hint: str = "") -> _VendorResult:
+        return _VendorResult(devices, False, detail, fix=fix, hint=hint or (
             f"AMD GPU found but {detail}. See README → GPU acceleration."
         ))
 
@@ -288,15 +295,17 @@ def _detect_amd(
         return failed("rocminfo did not run (timed out or failed to start)")
     if result.returncode != 0:
         if "permission" in (result.stdout + result.stderr).lower():
-            return failed("no permission to use the GPU", f"ROCm: {GROUPS_HINT}.")
-        return failed(f"rocminfo exited with status {result.returncode}")
+            return failed("no permission to use the GPU", GROUPS_HINT,
+                          f"ROCm: {GROUPS_HINT}.")
+        return failed(f"rocminfo exited with status {result.returncode}",
+                      "run rocminfo to see the error")
     agents = _parse_rocminfo(result.stdout)
     if not agents:
         return failed("rocminfo lists no GPU agent")
 
     if not exists(kfd_path) or not access(kfd_path, os.R_OK | os.W_OK):
         return failed(
-            f"{kfd_path} is not accessible",
+            f"{kfd_path} is not accessible", GROUPS_HINT,
             f"AMD GPU found but {kfd_path} is not accessible: {GROUPS_HINT}.",
         )
 
@@ -317,6 +326,7 @@ def _detect_amd(
         packages = " ".join(pkg for lib, pkg in ROCM_WHEEL_LIBS if lib in missing)
         return failed(
             f"ROCm libraries missing: {', '.join(missing)}",
+            f"sudo apt install {packages}",
             f"AMD GPU and ROCm runtime found, but CTranslate2 also needs "
             f"{', '.join(missing)}: sudo apt install {packages} "
             f"(from AMD's ROCm repository). See README → GPU acceleration.",
@@ -350,7 +360,8 @@ def _detect_amd(
 
     if chosen is None:
         found = ", ".join(a["name"] for a in agents)
-        return failed(f"no GPU target the ROCm wheel supports (found {found})")
+        return failed(f"no GPU target the ROCm wheel supports (found {found})",
+                      _README_FIX)
     return _VendorResult(
         devices,
         True,
@@ -387,7 +398,7 @@ def _detect_nvidia(
     ]
 
     def failed(detail: str) -> _VendorResult:
-        return _VendorResult(devices, False, detail, hint=(
+        return _VendorResult(devices, False, detail, fix=_README_FIX, hint=(
             f"NVIDIA GPU found but {detail}. See README → GPU acceleration."
         ))
 
@@ -431,6 +442,8 @@ def _detect_nvidia(
     if missing:
         return _VendorResult(
             smi_devices, False, f"CUDA libraries missing: {', '.join(missing)}",
+            fix="install the CUDA 12 cuBLAS and cuDNN 9 libraries (" + _README_FIX
+            + ")",
             hint=(
                 "NVIDIA GPU found but the CUDA 12 cuBLAS / cuDNN 9 libraries are "
                 f"missing ({', '.join(missing)}). See README → GPU acceleration."
@@ -494,10 +507,10 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
         if override not in working:
             detail = (results[override].detail if override in results
                       else f"no {override} GPU found")
+            failure = results.get(override, _VendorResult([], False, ""))
             return GpuReport(vendor, devices, False,
                              f"{OVERRIDE_ENV}={override}, but {detail}", "cpu",
-                             hint=results.get(override, _VendorResult([], False,
-                                                                       "")).hint)
+                             hint=failure.hint, fix=failure.fix or _README_FIX)
         backend = override
     elif working:
         # Both usable: the one with more VRAM wins.
@@ -510,7 +523,7 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
         # A GPU exists but nothing works: report the first failure's hint.
         first = next(iter(results.values()))
         return GpuReport(vendor, devices, False, first.detail, "cpu",
-                         hint=first.hint)
+                         hint=first.hint, fix=first.fix)
 
     chosen_result = working[backend]
     return GpuReport(
