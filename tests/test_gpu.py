@@ -46,7 +46,11 @@ def _rocminfo(*agents: str) -> str:
 # 12:00.0 -> BDFID 0x1200; 07:00.0 (an iGPU) -> 0x0700
 DGPU = _gpu_agent(2, "gfx1200", 0x1200, "AMD Radeon RX 9060 XT")
 IGPU = _gpu_agent(2, "gfx90c", 0x0700, "AMD Radeon Graphics")
-LD_ROCM7 = "\tlibamdhip64.so.7 (libc6,x86-64) => /opt/rocm/lib/libamdhip64.so.7\n"
+LD_HIP7 = "\tlibamdhip64.so.7 (libc6,x86-64) => /opt/rocm/lib/libamdhip64.so.7\n"
+LD_ROCM7 = LD_HIP7 + (
+    "\tlibhipblas.so.3 (libc6,x86-64) => /opt/rocm/lib/libhipblas.so.3\n"
+    "\tlibhiprand.so.1 (libc6,x86-64) => /opt/rocm/lib/libhiprand.so.1\n"
+)
 LD_ROCM6 = "\tlibamdhip64.so.6 (libc6,x86-64) => /opt/rocm/lib/libamdhip64.so.6\n"
 LD_CUDA = (
     "\tlibcublas.so.12 (libc6,x86-64) => /usr/lib/libcublas.so.12\n"
@@ -174,10 +178,19 @@ class TestAmd:
 
     def test_rocm_libs_outside_ld_cache_need_ld_library_path(self, amd):
         report, _ = _detect(amd, {"rocminfo": _rocminfo(DGPU), "ldconfig": ""},
-                            files={"/opt/rocm/lib/libamdhip64.so.7"})
+                            files={"/opt/rocm/lib/libamdhip64.so.7",
+                                   "/opt/rocm/lib/libhipblas.so.3",
+                                   "/opt/rocm/lib/libhiprand.so.1"})
         assert report.recommended_backend == "rocm"
         assert report.needs_ld_library_path
         assert report.machine_line("cp312").endswith("ld_path=1")
+
+    def test_hip_runtime_without_hipblas_hiprand_means_cpu(self, amd):
+        """ryan-dev's case: rocm-hip-runtime alone, no hipblas/hiprand."""
+        report, _ = _detect(amd, {"rocminfo": _rocminfo(DGPU), "ldconfig": LD_HIP7})
+        assert report.recommended_backend == "cpu"
+        assert "libhipblas.so.3, libhiprand.so.1" in report.runtime_detail
+        assert "sudo apt install hipblas hiprand" in report.hint
 
     def test_rocminfo_missing_means_cpu(self, amd):
         report, _ = _detect(amd, {"ldconfig": LD_ROCM7})

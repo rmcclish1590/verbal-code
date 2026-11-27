@@ -21,6 +21,17 @@ below as MCC-NN).
   installed GPU backend isn't working. `verbal-code --gpu-detect` prints
   the same detection as one machine-readable line for the installer
   (MCC-194).
+- GPU-accelerated Whisper on AMD Radeon GPUs. On a machine with a
+  supported AMD GPU and the ROCm 7.2+ runtime, `./install.sh` now
+  replaces PyPI's CUDA-only CTranslate2 with the ROCm build from the
+  CTranslate2 release, pinned to one version and checked against SHA-256
+  hashes stored in the repo. It then verifies a GPU is visible. If any
+  step fails, the installer puts the PyPI build back and Whisper runs on
+  CPU. NVIDIA machines keep the PyPI build and are checked for the CUDA
+  12 libraries. Machines without a GPU install exactly as before. There is
+  no new prompt; set `VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu` to override
+  the detection. `verbal-code --doctor --fix` reruns the same step later,
+  for example after a pip upgrade replaced the ROCm build (MCC-195).
 
 ### Security
 

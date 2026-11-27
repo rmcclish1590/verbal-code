@@ -4,6 +4,8 @@ PyYAML>=6.0,<7
 ruamel.yaml>=0.18,<0.19  # comment-preserving config rewrites (tray/hotkey saves)
 numpy>=1.24,<3
 sounddevice>=0.4.6,<0.6
+# ctranslate2 comes with faster-whisper; the ROCm build for AMD GPUs is pinned
+# in verbal_code/ct2_backend.py and installed by install.sh. Not listed here.
 faster-whisper>=1.0.0,<2
 onnx-asr[cpu,hub]>=0.12,<0.13  # Parakeet TDT batch STT (INT8, onnxruntime)
 sherpa-onnx>=2.0,<3  # true live-streaming STT (Zipformer / Nemotron)
