@@ -245,7 +245,7 @@ deploy_package "$SCRIPT_DIR" "$EXTRAS"
 ensure_ct2_backend \
     || fail "Could not keep the ROCm build of CTranslate2 (see above). If the ROCm runtime is gone, switch to CPU with verbal-code --doctor --fix, then update again."
 install_app_files "$SCRIPT_DIR"
-health_check || fail "The updated Verbal Code failed to start (verbal-code --version / --list-models)."
+health_check || fail "The updated Verbal Code failed its health check: it must start, list its models, and have consistent dependencies (see above)."
 if [ -n "$CT2_BACKEND" ]; then
     write_stamp "$NEW_VERSION" "$NEW_COMMIT" "$CT2_BACKEND" "$CT2_WHEEL" "$ROCM_LD_PATH"
 else

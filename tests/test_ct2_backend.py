@@ -181,7 +181,9 @@ class FakePip:
             self.installed = True
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if args[0] == "check":
-            out = "yt-dlp has requirement websockets>=12\n"
+            # Linux Mint 22's own conflict, seen through system site-packages.
+            out = ("yt-dlp 2024.4.9 has requirement websockets>=12.0, but you "
+                   "have websockets 10.4.\n")
             if self.installed:
                 out += self.check_after
             return subprocess.CompletedProcess(cmd, 1, out, "")
@@ -198,8 +200,12 @@ def _install(pip, verify_ok=True, previous=("pypi", "4.8.4"), fallback=True,
         obtain=lambda t, cache: f"/cache/{cb.wheel_filename(t)}",
         verify=lambda **kw: (verify_ok, "" if verify_ok else
                              "ctranslate2 sees no GPU device"),
-        machine="x86_64", previous=previous,
+        machine="x86_64", previous=previous, tree=TREE,
     )
+
+
+# Verbal Code's dependency tree, as depcheck.dependency_tree would find it.
+TREE = {"verbal-code", "faster-whisper", "ctranslate2", "numpy"}
 
 
 class TestInstallRocm:
@@ -229,11 +235,22 @@ class TestInstallRocm:
             _install(pip, verify_ok=False, previous=("rocm", "4.9.1"))
         assert pip.installs()[-1][-1] == f"ctranslate2=={cb.ROCM_VERSION}"
 
-    def test_new_pip_check_problem_is_a_failure(self):
-        pip = FakePip(check_after="faster-whisper 1.2.1 requires ctranslate2<5\n")
-        with pytest.raises(cb.BackendError, match="pip check"):
+    def test_own_dependency_conflict_is_a_failure(self):
+        pip = FakePip(check_after=(
+            "faster-whisper 1.2.1 has requirement ctranslate2<5,>=4.0, but you "
+            "have ctranslate2 5.0.0.\n"))
+        with pytest.raises(cb.BackendError,
+                           match="dependencies conflict: faster-whisper 1.2.1"):
             _install(pip)
         assert pip.installs()[-1][-1] == "ctranslate2==4.8.4"
+
+    def test_new_unrelated_conflict_is_not_a_failure(self):
+        """Only Verbal Code's own tree counts (MCC-202)."""
+        pip = FakePip(check_after=(
+            "httpie 3.2.2 has requirement requests>=2.32, but you have "
+            "requests 2.31.0.\n"))
+        assert _install(pip) == cb.wheel_filename("cp312")
+        assert len(pip.installs()) == 1  # no rollback
 
     def test_pip_failure_without_fallback_leaves_rollback_to_caller(self):
         pip = FakePip(fail_install=True)

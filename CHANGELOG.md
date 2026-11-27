@@ -103,6 +103,16 @@ below as MCC-NN).
 
 ### Fixed
 
+- `./install.sh` no longer prints pip's `ERROR: pip's dependency resolver
+  does not currently take into account ...` for conflicts between other
+  programs' Python packages. The venv sees the system's packages, so on
+  Linux Mint 22 pip reported the distro's own yt-dlp / websockets mismatch
+  as if the install had failed. The installer, `./update.sh`, the GPU
+  backend step and `verbal-code --doctor --fix` now check only Verbal
+  Code's own dependencies. Unrelated conflicts get one note saying
+  Verbal Code isn't affected. They never roll back the GPU backend or
+  fail an update. A conflict in Verbal Code's own dependencies still
+  stops the install, and rolls an update back (MCC-202).
 - A dictionary file that isn't valid JSON (or has the wrong shape) no
   longer stops Verbal Code from starting. It runs without the dictionary,
   logs a warning, and refuses to save over the file so nothing in it is

@@ -238,16 +238,77 @@ build_package() {  # repo extras
 # package applies the version pins in pyproject.toml, and pip only replaces
 # distributions whose version changes.
 deploy_package() {  # repo extras
-    "$PYTHON" -m pip install --quiet -e "$1$2"
-    "$PYTHON" -m pip install --quiet pytest ruff
+    pip_install --quiet -e "$1$2"
+    pip_install --quiet pytest ruff
+    check_dependencies \
+        || fail "Verbal Code's Python dependencies conflict (listed above). Re-run the installer; if that doesn't fix it, report it."
 }
 
-# The installed app starts and its model catalog loads. Runs from / because
-# `python -m` puts the working directory on sys.path, and from a checkout
-# that would import ./verbal_code instead of what was just installed.
+# ── Dependency conflicts (MCC-202) ──
+# The venv uses --system-site-packages (the tray needs the system's GTK
+# bindings), so pip also sees every distro Python package, and those can
+# conflict among themselves: Linux Mint 22's yt-dlp 2024.4.9 wants
+# websockets>=12 next to its websockets 10.4. pip then prints
+# "ERROR: pip's dependency resolver does not currently take into account
+# ..." after any install that touches one of yt-dlp's dependencies (brotli,
+# on a fresh venv). That is not Verbal Code's problem and must not fail a
+# step. verbal_code.depcheck (also used by the GPU backend step) counts
+# only conflicts inside Verbal Code's own dependency tree.
+
+# Removes pip's resolver-conflict block from pip's stderr on stdin;
+# check_dependencies reports what matters instead.
+strip_resolver_conflicts() {
+    awk '
+        /^ERROR: pip.s dependency resolver does not currently take into account/ { skip = 1; next }
+        skip && / (requires|has requirement|is not supported)/ { next }
+        { skip = 0; print }
+    '
+}
+
+# pip install "$@" in the venv, without the resolver-conflict block. When
+# pip itself fails, its whole output is shown.
+pip_install() {
+    local err rc=0
+    err=$(mktemp)
+    "$PYTHON" -m pip install "$@" 2>"$err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        cat "$err" >&2
+    else
+        strip_resolver_conflicts < "$err" >&2
+    fi
+    rm -f "$err"
+    return "$rc"
+}
+
+# Returns 1 when Verbal Code's own dependency tree has a conflict (each is
+# printed). A conflict among unrelated packages prints one note, unless
+# --quiet is given, and passes.
+check_dependencies() {  # [--quiet]
+    local note rc=0 args=()
+    if [ "${1:-}" = --quiet ]; then
+        args=(--no-note)
+    fi
+    note=$(cd / && "$PYTHON" -m verbal_code.depcheck "${args[@]}") || rc=$?
+    case "$rc" in
+        0)
+            if [ -n "$note" ]; then
+                info "$note"
+            fi
+            ;;
+        1) return 1 ;;
+        *) warn "Could not check the Python dependencies (see above); continuing." ;;
+    esac
+}
+
+# The installed app starts, its model catalog loads, and its dependencies
+# are consistent (after update.sh's GPU backend step, too). Runs from /
+# because `python -m` puts the working directory on sys.path, and from a
+# checkout that would import ./verbal_code instead of what was just
+# installed.
 health_check() {
     (cd / && "$PYTHON" -m verbal_code --version >/dev/null \
-        && "$PYTHON" -m verbal_code --list-models >/dev/null)
+        && "$PYTHON" -m verbal_code --list-models >/dev/null) \
+        && check_dependencies --quiet
 }
 
 # ── GPU backend (MCC-195) ──

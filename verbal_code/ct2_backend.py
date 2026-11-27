@@ -37,7 +37,7 @@ import urllib.request
 import zipfile
 from collections.abc import Callable
 
-from verbal_code import gpu
+from verbal_code import depcheck, gpu
 
 ROCM_VERSION = "4.9.1"
 ROCM_ZIP_URL = (
@@ -256,16 +256,6 @@ def _pip(run: RunFn, python: str, *args: str) -> subprocess.CompletedProcess:
                cwd="/")
 
 
-def _pip_problems(run: RunFn, python: str) -> set[str]:
-    """``pip check`` complaints. The venv sees system site-packages, whose
-    own conflicts (e.g. a distro yt-dlp) predate us, so callers compare
-    before and after instead of requiring a clean result."""
-    result = _pip(run, python, "check")
-    if result.returncode == 0:
-        return set()
-    return {ln for ln in result.stdout.splitlines() if ln.strip()}
-
-
 def installed_version() -> str | None:
     from importlib import metadata
 
@@ -356,10 +346,16 @@ def install_rocm(
     machine: str | None = None,
     previous: tuple[str, str | None] | None = None,
     env: dict[str, str] | None = None,
+    tree: set[str] | None = None,
 ) -> str:
     """Install the pinned ROCm wheel and verify it. Returns the wheel file
     name. On failure raises BackendError; with ``fallback`` the PyPI wheel
-    is reinstalled first, so the venv keeps a working (CPU) ctranslate2."""
+    is reinstalled first, so the venv keeps a working (CPU) ctranslate2.
+
+    The dependency check counts only conflicts inside Verbal Code's own
+    dependency tree (``tree``, default: this interpreter's view of it).
+    Conflicts among unrelated system packages, which the venv sees through
+    --system-site-packages, never fail the install (MCC-202)."""
     tag = tag or gpu.python_tag()
     machine = machine or platform.machine()
     if machine != "x86_64":
@@ -372,7 +368,6 @@ def install_rocm(
     # A rollback reinstalls what pip resolved before the swap; when that was
     # already a ROCm build, PyPI's release of the pinned version.
     rollback_version = version if flavor == "pypi" else ROCM_VERSION
-    problems_before = _pip_problems(run, python)
 
     result = _pip(run, python, "install", "--quiet", "--force-reinstall",
                   "--no-deps", wheel)
@@ -382,8 +377,8 @@ def install_rocm(
     else:
         ok, error = verify(run=run, python=python, env=env)
         if ok:
-            new = _pip_problems(run, python) - problems_before
-            error = "" if not new else "pip check: " + "; ".join(sorted(new))
+            report = depcheck.check(run=run, python=python, tree=tree)
+            error = "" if report.ok else report.failure()
     if not error:
         return os.path.basename(wheel)
     if fallback:
