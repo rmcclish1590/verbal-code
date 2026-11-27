@@ -260,6 +260,23 @@ def _assert_numeric_values(config: dict) -> None:
             sys.exit(1)
 
 
+CT2_ALLOCATORS = ("cub_caching", "cuda_malloc_async")
+
+
+def apply_ct2_environment(config: dict, env: dict | None = None) -> None:
+    """Export ``stt.whisper.ct2_allocator`` as ``CT2_CUDA_ALLOCATOR``
+    (MCC-198). CTranslate2 reads it once, when first imported, and
+    validate_config imports faster_whisper (and so ctranslate2), so main()
+    calls this straight after loading the config. A value the user already
+    exported wins; an invalid config value is left for validate_config to
+    reject."""
+    env = os.environ if env is None else env
+    whisper_cfg = (config.get("stt") or {}).get("whisper") or {}
+    allocator = whisper_cfg.get("ct2_allocator")
+    if allocator in CT2_ALLOCATORS and "CT2_CUDA_ALLOCATOR" not in env:
+        env["CT2_CUDA_ALLOCATOR"] = allocator
+
+
 def _assert_whisper_device(config: dict) -> None:
     """Exit on a ``stt.whisper.device`` / ``compute_type`` CTranslate2
     doesn't know. ``cuda`` covers AMD ROCm too (MCC-197)."""
@@ -277,6 +294,14 @@ def _assert_whisper_device(config: dict) -> None:
                 " (use 'cuda' for AMD ROCm GPUs too)" if key == "device" else "",
             )
             sys.exit(1)
+    allocator = whisper_cfg.get("ct2_allocator")
+    if allocator is not None and allocator not in CT2_ALLOCATORS:
+        logger.error(
+            "stt.whisper.ct2_allocator must be null, %s, got %r",
+            " or ".join(f"'{a}'" for a in CT2_ALLOCATORS),
+            allocator,
+        )
+        sys.exit(1)
 
 
 def _assert_sample_rate_supported(engine: str, config: dict) -> None:
@@ -1305,6 +1330,8 @@ def main() -> None:
         print(detect().machine_line())
         sys.exit(0)
     config = load_config(args.config)
+    # Before anything imports ctranslate2 (validate_config does).
+    apply_ct2_environment(config)
     setup_logging(config)
 
     if args.doctor:

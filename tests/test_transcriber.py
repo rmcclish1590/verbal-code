@@ -575,7 +575,24 @@ def gpu_whisper(monkeypatch):
                         lambda: None)
     monkeypatch.setattr(WhisperTranscriber, "_gpu_label",
                         lambda self: f"rocm, gfx1200, idx {self.device_index}")
+    fake.vram = {"total": 16 * 1024**3, "used": 1024**3}
+    _fake_detect(monkeypatch, fake.vram)
     return fake
+
+
+def _fake_detect(monkeypatch, vram):
+    """gpu.detect() answering with one RX 9060 XT at index 0 (and 1)."""
+    from verbal_code import gpu
+
+    def detect(**kwargs):
+        devices = [
+            gpu.GpuDevice(vendor="amd", name="RX 9060 XT", pci_id="1002:7590",
+                          target="gfx1200", vram_total=vram["total"],
+                          vram_used=vram["used"], index=i, supported=True)
+            for i in (0, 1)
+        ]
+        return gpu.GpuReport("amd", devices, True, "ok", "rocm", chosen=devices[0])
+    monkeypatch.setattr(gpu, "detect", detect)
 
 
 def _warnings(caplog):
@@ -728,3 +745,39 @@ def test_pip_replaced_rocm_wheel_warns_once(monkeypatch, caplog):
     assert "replaced by a pip upgrade" in warnings[0].getMessage()
     assert "--doctor --fix" in warnings[0].getMessage()
     assert t.device == "cpu"
+
+
+class TestVramPrecheck:
+    """MCC-198: a GPU whose memory another app holds is skipped up front."""
+
+    def test_low_free_vram_warns_and_uses_cpu(self, gpu_whisper, caplog):
+        gpu_whisper.vram["used"] = 16 * 1024**3 - 200 * 1024**2  # 200 MiB free
+        t = WhisperTranscriber()
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert gpu_whisper.devices() == ["cpu"]  # the GPU load isn't attempted
+        assert t.device == "cpu"
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1 and warnings[0].levelname == "WARNING"
+        message = warnings[0].getMessage()
+        assert "200 MiB free" in message and "Ollama" in message
+        assert "ollama stop" in message and "OLLAMA_KEEP_ALIVE" in message
+
+    def test_unreadable_vram_never_blocks_the_gpu(self, gpu_whisper):
+        gpu_whisper.vram.update(total=None, used=None)
+        t = WhisperTranscriber()
+        t.load_model()
+        assert t.device == "cuda"
+
+    def test_enough_vram_loads_on_gpu(self, gpu_whisper):
+        t = WhisperTranscriber(model_size="large-v3-turbo")
+        t.load_model()
+        assert t.device == "cuda"
+
+    def test_estimates_scale_with_model_and_precision(self):
+        from verbal_code.transcriber import whisper_vram_estimate
+
+        small = whisper_vram_estimate("distil-small.en", "float16")
+        assert whisper_vram_estimate("large-v3-turbo", "float16") > small
+        assert whisper_vram_estimate("distil-small.en", "int8") < small
+        assert 0.5 * 1024**3 < small < 1024**3

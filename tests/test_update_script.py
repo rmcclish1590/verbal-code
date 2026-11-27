@@ -643,3 +643,23 @@ def test_newly_detected_gpu_is_offered_not_switched(sandbox):
     assert "--doctor --fix" in out
     assert "GPU: CPU (GPU problem" in out  # the doctor's verdict (R9.6)
     assert sandbox.ct2_calls() == []
+
+
+def test_launcher_gets_rocm_lib_path_only_when_recorded(sandbox):
+    """MCC-198: LD_LIBRARY_PATH only for rocm, and only when needed."""
+    sandbox.install_gpu()
+    sandbox.stamp.write_text(sandbox.stamp.read_text() + "rocm_ld_path=1\n")
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    launcher = sandbox.launcher.read_text()
+    assert 'export LD_LIBRARY_PATH="/opt/rocm/lib' in launcher
+    assert "rocm_ld_path=1" in sandbox.stamp.read_text()
+    # A dry run afterwards sees the launcher as current.
+    assert "Files to replace: none" in _output(sandbox.run("--dry-run"))
+
+
+def test_launcher_has_no_rocm_lib_path_by_default(sandbox):
+    sandbox.install_gpu()
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    assert "LD_LIBRARY_PATH" not in sandbox.launcher.read_text()

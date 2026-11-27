@@ -390,12 +390,20 @@ doctor_verdict() {
 }
 
 # ── Launcher, desktop entry and icon ──
+# With ROCM_LD_PATH=1 (the ROCm backend, whose libraries resolve only from
+# /opt/rocm/lib because ROCm was installed without an ld.so.conf.d entry;
+# detected at install time and kept in the stamp) the launcher puts that
+# directory on LD_LIBRARY_PATH. Everyone else gets the plain launcher
+# (MCC-198).
+# shellcheck disable=SC2016  # the $-expressions belong to the launcher
 render_launcher() {
-    cat << 'LAUNCHER_EOF'
-#!/usr/bin/env bash
-VENV="$HOME/.local/share/verbal-code/venv"
-exec "$VENV/bin/python" -m verbal_code "$@"
-LAUNCHER_EOF
+    echo '#!/usr/bin/env bash'
+    echo 'VENV="$HOME/.local/share/verbal-code/venv"'
+    if [ "${ROCM_LD_PATH:-0}" = 1 ]; then
+        echo '# The ROCm build of CTranslate2 loads its HIP libraries from here.'
+        echo 'export LD_LIBRARY_PATH="/opt/rocm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+    fi
+    echo 'exec "$VENV/bin/python" -m verbal_code "$@"'
 }
 
 render_desktop_entry() {

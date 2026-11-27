@@ -526,6 +526,7 @@ class TestGpuFallbackMidSession:
         monkeypatch.setattr("verbal_code.transcriber._replaced_rocm_reason",
                             lambda: None)
         monkeypatch.setattr(WhisperTranscriber, "_gpu_label", lambda self: "idx 0")
+        monkeypatch.setattr(WhisperTranscriber, "_vram_shortfall", lambda self: None)
         transcriber = WhisperTranscriber(cpu_threads=2)
         transcriber.load_model()
         assert transcriber.device == "cuda"

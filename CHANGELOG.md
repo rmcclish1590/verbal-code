@@ -55,6 +55,16 @@ below as MCC-NN).
   the tray's Model menu marks Whisper models "(GPU)", and the installer's
   model menu adds a "Whisper distil-small.en on your GPU" choice as option
   7. Options 1-6 are unchanged (MCC-197).
+- Before loading Whisper on the GPU, Verbal Code checks free VRAM (AMD
+  through sysfs, NVIDIA through `nvidia-smi`). If another app, typically
+  Ollama, holds too much of it, Whisper starts on CPU with a warning that
+  names the cause and the fix (`ollama stop <model>`, a shorter
+  `OLLAMA_KEEP_ALIVE`). Unreadable VRAM never blocks the GPU. The new
+  `stt.whisper.ct2_allocator` (or an exported `CT2_CUDA_ALLOCATOR`) sets
+  CTranslate2's GPU allocator before CTranslate2 is first imported. On a
+  ROCm install whose libraries load only from `/opt/rocm/lib`, the
+  launcher puts that directory on `LD_LIBRARY_PATH`; nobody else's
+  launcher changes (MCC-198).
 
 ### Security
 

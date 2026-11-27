@@ -89,6 +89,10 @@ if [ "$DRY_RUN" = true ]; then
         warn "Dependencies do not resolve for this checkout; a real run would stop here."
     fi
     info "GPU backend: $(ct2_backend_plan)"
+    # The launcher keeps the recorded LD_LIBRARY_PATH need (MCC-198).
+    if [ "$(read_stamp gpu_backend)" = rocm ]; then
+        ROCM_LD_PATH=$(read_stamp rocm_ld_path)
+    fi
     install_app_files "$SCRIPT_DIR" check
     info "Files to replace: ${APP_FILES_CHANGED[*]:-none}"
     info "Files already current: ${APP_FILES_UNCHANGED[*]:-none}"

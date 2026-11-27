@@ -47,6 +47,11 @@ stt:
     compute_type: "auto"
     # Which GPU, when there are several (0 = the first CTranslate2 sees).
     device_index: 0
+    # GPU memory allocator (CTranslate2's CT2_CUDA_ALLOCATOR): null leaves
+    # CTranslate2's default, which on AMD/ROCm is already "cub_caching". Try
+    # "cuda_malloc_async" (NVIDIA) or "cub_caching" if you see garbage output
+    # or memory faults. An exported CT2_CUDA_ALLOCATOR wins over this.
+    ct2_allocator: null
     language: "en"
     # 2 is ~2x faster than 5 on CPU with negligible accuracy loss on short
     # dictations; raise to 5 if you notice misrecognitions on long sentences.
