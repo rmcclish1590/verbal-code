@@ -1,0 +1,42 @@
+# Tests, lint and the install scripts' syntax on every push to main and
+# every pull request (MCC-199). No GPU, audio hardware or network access
+# to model hosts is needed: GPU, audio and download code is tested with
+# fakes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: System packages
+        # libportaudio2: sounddevice loads it at import. shellcheck: lint.
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 shellcheck
+      - name: Install
+        run: python -m pip install -e . pytest ruff
+      - name: Tests
+        run: python -m pytest -q
+      - name: Lint
+        run: python -m ruff check .
+      - name: Script syntax
+        run: bash -n install.sh update.sh uninstall.sh scripts/install-lib.sh
+      - name: Shellcheck
+        run: shellcheck -x install.sh update.sh uninstall.sh scripts/install-lib.sh

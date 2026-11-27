@@ -122,8 +122,10 @@ stt:
   cpu_threads: 6       # optional; default = one per physical CPU core
   whisper:
     model: "distil-small.en" # see table below
-    device: "auto"           # auto|cpu|cuda
-    compute_type: "int8"
+    device: "auto"           # auto|cpu|cuda — "cuda" means the GPU on AMD/ROCm too
+    compute_type: "auto"     # auto = float16 on GPU, int8 on CPU
+    device_index: 0          # which GPU, when there are several
+    ct2_allocator: null      # GPU allocator workaround, see GPU acceleration
     language: "en"
     beam_size: 2          # 2 = fast; 5 = slightly more accurate, ~2x slower on CPU
     batch_size: 8            # parallel-decode batch for the batched pipeline
@@ -211,7 +213,109 @@ are more accurate than the multilingual models at the same size:
 | large-v3-turbo    | ~1.6GB | Slow    | Great    | GPU recommended              |
 
 Whisper runs one CTranslate2 thread per physical CPU core (6 on a Ryzen 5
-5600G) instead of CTranslate2's default of 4.
+5600G) instead of CTranslate2's default of 4. With a supported GPU it runs
+there instead; see [GPU acceleration](#gpu-acceleration).
+
+## GPU acceleration
+
+Whisper (and only Whisper; Parakeet, sherpa-onnx, Moonshine and Vosk run on
+CPU) can transcribe on an AMD or NVIDIA GPU. `./install.sh` detects the GPU
+and sets it up; there is nothing to choose. Without a usable GPU everything
+works exactly as on CPU.
+
+**Supported hardware**
+
+- **AMD Radeon** through ROCm, using the ROCm build of CTranslate2 that the
+  installer downloads, pinned to one version and checked against SHA-256
+  hashes in the repo. RX 9060 / 9060 XT (gfx1200) and the RX 9070 family
+  (gfx1201) are officially supported by ROCm 7.2, as are RX 7900 / 7800 /
+  7700 (gfx1100 / gfx1101). The build also includes gfx1030–1035, gfx1102,
+  gfx1103, gfx1150 and gfx1151, which may work but aren't AMD-certified.
+  Integrated GPUs such as a Ryzen 5600G's (gfx90c) are skipped.
+- **NVIDIA** GPUs that CTranslate2's CUDA 12 build supports, using the
+  regular PyPI build.
+
+**Requirements**
+
+- x86_64, Python 3.10–3.15.
+- AMD: **ROCm 7.2 or newer**, including the hipBLAS and hipRAND libraries
+  (the build links `libamdhip64.so.7`, `libhipblas.so.3` and
+  `libhiprand.so.1`). The `rocm-hip-runtime` package alone isn't enough:
+  `sudo apt install hipblas hiprand` from AMD's ROCm repository. Your user
+  must be in the `render` and `video` groups
+  (`sudo usermod -aG render,video $USER`, then log out and in).
+- NVIDIA: the driver (`nvidia-smi` works) plus the CUDA 12 cuBLAS and
+  cuDNN 9 libraries, either system-wide or as the
+  `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` pip packages (see
+  [faster-whisper's GPU notes](https://github.com/SYSTRAN/faster-whisper#gpu)).
+  The installer checks for them but doesn't install them.
+- AMD's ROCm 7.2 support list names Ubuntu 22.04.5 / 24.04.x and RHEL, not
+  Linux Mint. Mint 22 (Ubuntu 24.04-based) works in practice but isn't
+  AMD-certified. Detection is runtime-based, not distro-based.
+
+The installer never installs drivers, ROCm or CUDA itself; it tells you
+what's missing.
+
+**Choosing a model.** Start with `distil-small.en`. The installer's model
+menu adds "Whisper distil-small.en on your GPU" (option 7) on a GPU
+machine. Use `large-v3-turbo` for the best accuracy on a GPU with 4 GB of
+VRAM or more. The default engine stays Parakeet (CPU); switch from the
+tray's Model menu, which marks Whisper models "(GPU)" when they'll run
+there.
+
+**Verify it works**
+
+```bash
+rocminfo | grep -E 'Marketing Name|Name: +gfx'   # AMD: the GPU and its gfx target
+verbal-code --doctor                            # ends with "Verdict: GPU OK"
+```
+
+The doctor lists the detected GPUs (gfx target or compute capability, VRAM
+used/total), the ROCm/CUDA runtime status, the installed CTranslate2 build
+against the one the install recorded, the GPU count CTranslate2 sees, the
+relevant environment variables and the device Whisper will use. Its last
+line is `GPU OK`, `CPU (no GPU)` or `CPU (GPU problem: …, fix: …)`, and it
+exits 1 when an installed GPU backend isn't working. The app's log also
+has one line per start, e.g.
+`Whisper: model=distil-small.en device=cuda(rocm, gfx1200, idx 0) compute_type=float16`.
+Watch `amdgpu_top`, `rocm-smi` or `nvidia-smi` during a dictation to see
+the GPU work.
+
+**Config.** `device: "cuda"` is the name for the GPU on **AMD/ROCm too**.
+`auto` (the default) uses the GPU when there is one and the CPU otherwise.
+`cuda` insists on the GPU: if it can't be used, Whisper still falls back to
+CPU so dictation works, but it logs an error and shows a tray notification.
+`compute_type: auto` picks float16 on GPU (fastest) and int8 on CPU; an
+explicit value is always used as given, so an older config's `int8` stays
+int8 on the GPU (works, slower). `device_index` picks a GPU when there are
+several. **To force the CPU,** set `device: "cpu"`.
+
+**When something goes wrong** Whisper falls back to CPU and logs one line
+saying why: the GPU failed to load or warm up, it ran out of memory during
+a dictation (that dictation is retried on CPU, then the session stays on
+CPU), or not enough VRAM is free. Run `verbal-code --doctor` for the
+details.
+
+- *Not enough free GPU memory:* another GPU app is holding VRAM, often
+  Ollama, which keeps models loaded for a while. Free it with
+  `ollama stop <model>`, or set a shorter `OLLAMA_KEEP_ALIVE`.
+- *After `pip install -U faster-whisper` (or anything that reinstalled
+  `ctranslate2`):* pip put back PyPI's CUDA-only build. The app warns
+  "GPU backend was replaced by a pip upgrade". Run `verbal-code --doctor
+  --fix`, which reinstalls the pinned ROCm build after asking. `./update.sh`
+  does this by itself, and rolls the update back if it can't.
+- *Garbage output or memory faults:* try a different allocator with
+  `stt.whisper.ct2_allocator: "cuda_malloc_async"` (NVIDIA) or
+  `"cub_caching"`, or export `CT2_CUDA_ALLOCATOR` (an exported value wins).
+  On ROCm, `cub_caching` is already the default.
+- *Unsupported AMD card:* `HSA_OVERRIDE_GFX_VERSION` (e.g. `11.0.0`) makes
+  ROCm treat it as a supported target. Verbal Code never sets it for you,
+  because it can crash or produce wrong output.
+- *Several GPUs:* `stt.whisper.device_index`, or `HIP_VISIBLE_DEVICES` /
+  `CUDA_VISIBLE_DEVICES`, chooses which one. The doctor shows each GPU's
+  index.
+- `VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu ./install.sh` overrides the
+  installer's detection.
 
 ### Audio
 
@@ -511,6 +615,8 @@ verbal-code --list-devices       # Show audio input devices
 verbal-code --test-audio         # Record 3s, save to WAV
 verbal-code --test-transcribe    # Record 5s, transcribe, print result
 verbal-code --test-inject        # Inject test text into focused window
+verbal-code --doctor             # Is GPU transcription working? Why not?
+verbal-code --doctor --fix       # Install the CTranslate2 build for your GPU
 verbal-code --version            # Print version
 verbal-code --help               # Show all options
 ```
@@ -541,7 +647,8 @@ first use.
 - Python 3.10+
 - A working microphone
 - `xdotool` (installed automatically by `install.sh`)
-- For GPU acceleration: NVIDIA GPU with CUDA toolkit
+- Optional GPU acceleration for Whisper: an AMD GPU with ROCm 7.2+ or an
+  NVIDIA GPU with CUDA 12 libraries (see [GPU acceleration](#gpu-acceleration))
 
 ### Wayland
 
@@ -567,7 +674,7 @@ The evdev listener needs read access to `/dev/input`. Add your user to the `inpu
 The installer downloads the selected model; if that was skipped or failed, the first run downloads it (Parakeet ~660 MB with the default config). Ensure you have internet access, or fetch it ahead of time with `verbal-code --download-model`. Models cache in `~/.cache/huggingface/` (Whisper, Parakeet), `~/.cache/verbal-code/sherpa-onnx/` (sherpa), or `~/.cache/verbal-code/models/` (Vosk).
 
 **High latency:**
-Switch to a smaller model (`tiny` or `base`) or ensure CUDA is working if you have a GPU. Check `device: "auto"` in config.
+Switch to a smaller model (`tiny` or `base`). If you have a GPU, run `verbal-code --doctor` to check that Whisper uses it (see [GPU acceleration](#gpu-acceleration)), and check `device: "auto"` in config.
 
 **Permission denied on hotkeys:**
 pynput needs access to `/dev/input/` devices. Add your user to the `input` group: `sudo usermod -aG input $USER` then log out/in.
