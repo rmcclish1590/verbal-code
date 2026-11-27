@@ -15,6 +15,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -50,14 +51,38 @@ if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then
                 echo "app running during install" >> "$FAKE_LOG"
             fi
             touch "$venv/deployed-marker"
+            # pip's post-install resolver note about another package.
+            if [ -n "${FAKE_RESOLVER_NOTE:-}" ]; then
+                printf '%s %s %s\n' \
+                    "ERROR: pip's dependency resolver does not currently take" \
+                    "into account all the packages that are installed. This" \
+                    "behaviour is the source of the following dependency conflicts." >&2
+                echo "$FAKE_RESOLVER_NOTE" >&2
+            fi
             # A dependency bump makes pip swap the ROCm build for PyPI's.
             if [ -n "${FAKE_DEPLOY_REPLACES_CT2:-}" ]; then
                 echo "pypi 4.9.1" > "$venv/ct2-flavor"
             fi
             [ "${FAKE_FAIL:-}" = deploy ] && exit 1
             exit 0 ;;
+        check)
+            # FAKE_PIP_CHECK, or FAKE_PIP_CHECK_AFTER_DEPLOY once deployed.
+            out=${FAKE_PIP_CHECK:-}
+            if [ -f "$venv/deployed-marker" ] \
+                && [ -n "${FAKE_PIP_CHECK_AFTER_DEPLOY:-}" ]; then
+                out=$FAKE_PIP_CHECK_AFTER_DEPLOY
+            fi
+            [ -z "$out" ] && { echo "No broken requirements found."; exit 0; }
+            echo "$out"
+            exit 1 ;;
     esac
     exit 0
+fi
+# The real dependency check (MCC-202): Verbal Code's tree from the test
+# interpreter's metadata, `pip check` answered by this stub.
+if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code.depcheck ]; then
+    echo "depcheck ${*:3}" >> "$FAKE_LOG"
+    exec "$FAKE_REAL_PYTHON" -m verbal_code.depcheck --pip-python "$0" "${@:3}"
 fi
 if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code.ct2_backend ]; then
     echo "ct2 ${*:3}" >> "$FAKE_LOG"
@@ -234,6 +259,7 @@ class Sandbox:
             "PATH": f"{self.fakebin}:{os.environ['PATH']}",
             "FAKE_LOG": str(self.log),
             "FAKE_WHEEL": FAKE_WHEEL,
+            "FAKE_REAL_PYTHON": sys.executable,
             "DISPLAY": ":test",
             **self.extra_env,
         }
@@ -663,3 +689,49 @@ def test_launcher_has_no_rocm_lib_path_by_default(sandbox):
     result = sandbox.run()
     assert result.returncode == 0, _output(result)
     assert "LD_LIBRARY_PATH" not in sandbox.launcher.read_text()
+
+
+# ── Dependency conflicts (MCC-202) ──
+
+# Linux Mint 22's own conflict, seen through --system-site-packages.
+MINT_CONFLICT = ("yt-dlp 2024.4.9 has requirement websockets>=12.0, but you "
+                 "have websockets 10.4.")
+MINT_RESOLVER_LINE = ("yt-dlp 2024.4.9 requires websockets>=12.0, but you have "
+                      "websockets 10.4 which is incompatible.")
+OWN_CONFLICT = ("faster-whisper 1.2.1 has requirement ctranslate2<5,>=4.0, but "
+                "you have ctranslate2 5.0.0.")
+
+
+def test_unrelated_system_conflict_passes_with_one_note(sandbox):
+    sandbox.install_gpu()
+    result = sandbox.run(FAKE_PIP_CHECK=MINT_CONFLICT,
+                         FAKE_RESOLVER_NOTE=MINT_RESOLVER_LINE)
+    out = result.stdout + result.stderr
+    assert result.returncode == 0, out
+    assert "ERROR:" not in out and "dependency resolver" not in out
+    assert out.count("yt-dlp wants websockets>=12.0") == 1
+    assert "Verbal Code doesn't use them and isn't affected" in out
+    assert sandbox.flavor() == "rocm 4.9.1"  # the GPU backend stays
+    assert "gpu_backend=rocm" in sandbox.stamp.read_text()
+    assert not sandbox.backup.exists()
+
+
+def test_own_dependency_conflict_fails_and_rolls_back(sandbox):
+    sandbox.install()
+    old_launcher = sandbox.launcher.read_text()
+    result = sandbox.run(FAKE_PIP_CHECK=MINT_CONFLICT,
+                         FAKE_PIP_CHECK_AFTER_DEPLOY=f"{MINT_CONFLICT}\n{OWN_CONFLICT}")
+    out = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert ("Verbal Code's dependencies conflict: faster-whisper 1.2.1 has "
+            "requirement ctranslate2<5,>=4.0") in out
+    assert "yt-dlp" not in out.split("dependencies conflict:", 1)[1].splitlines()[0]
+    assert "Rolled back" in out or "rolled back" in out
+    assert sandbox.launcher.read_text() == old_launcher
+
+
+def test_dry_run_ignores_unrelated_conflicts(sandbox):
+    sandbox.install()
+    result = sandbox.run("--dry-run", FAKE_PIP_CHECK=MINT_CONFLICT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ERROR:" not in result.stdout + result.stderr
