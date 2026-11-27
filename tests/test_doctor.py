@@ -81,6 +81,47 @@ class TestVerdict:
         assert "ROCm build of CTranslate2 is not installed" in out
 
 
+class TestLibraries:
+    """The per-library table and fix commands (MCC-201)."""
+
+    def _report(self):
+        report = _report("cpu")
+        report.runtime_detail = ("ROCm libraries missing: librocrand.so.1 "
+                                 "(rocrand); installed but not in the loader "
+                                 "cache: libhipblas.so.3")
+        report.fix = "sudo apt install rocrand && sudo ldconfig"
+        report.libraries = [
+            gpu.LibraryStatus("libamdhip64.so.7", gpu.LIB_OK, "hip-runtime-amd",
+                              "/opt/rocm/lib/libamdhip64.so.7"),
+            gpu.LibraryStatus("libhipblas.so.3", gpu.LIB_STALE, "hipblas",
+                              "/opt/rocm/lib/libhipblas.so.3"),
+            gpu.LibraryStatus("librocrand.so.1", gpu.LIB_MISSING, "rocrand",
+                              needed_by="libhiprand.so.1"),
+        ]
+        return report
+
+    def test_table_lists_every_library_and_the_fix(self):
+        code, out = _run(report=self._report(), probe=NO_DEVICE,
+                         flavor=("pypi", "4.9.1"), marker="cpu")
+        assert code == 0
+        assert "libamdhip64.so.7" in out and "ok (package hip-runtime-amd)" in out
+        assert "libhipblas.so.3" in out and "run sudo ldconfig" in out
+        assert ("missing, needed by libhiprand.so.1: sudo apt install rocrand"
+                in out)
+        assert "Fix                       sudo apt install rocrand && sudo ldconfig" \
+            in out
+        assert "fix: sudo apt install rocrand && sudo ldconfig" in out
+
+    def test_import_error_on_a_library_names_its_package(self):
+        probe = doctor.Ct2Probe(
+            False, error="ImportError: librocrand.so.1: cannot open shared "
+            "object file: No such file or directory")
+        code, out = _run(report=_report("rocm"), probe=probe,
+                         flavor=("rocm", "4.9.1"), marker="rocm")
+        assert code == 1
+        assert "fix: librocrand.so.1 is in the rocrand package" in out
+
+
 def test_env_vars_are_listed():
     out = io.StringIO()
     doctor.run_doctor({}, out=out, env={"HIP_VISIBLE_DEVICES": "1"},

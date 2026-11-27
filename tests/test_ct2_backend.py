@@ -258,7 +258,62 @@ class TestInstallRocm:
         assert pip.calls == []
 
 
+def _missing_rocrand_report() -> gpu.GpuReport:
+    lib = gpu.LibraryStatus("librocrand.so.1", gpu.LIB_MISSING, "rocrand",
+                            needed_by="libhiprand.so.1")
+    return gpu.GpuReport(
+        "amd", [], False, "ROCm libraries missing: librocrand.so.1 (rocrand)",
+        "cpu", fix="sudo apt install rocrand && sudo ldconfig",
+        hint="... Run: sudo apt install rocrand && sudo ldconfig ...",
+        libraries=[lib],
+    )
+
+
+class TestMissingLibraryNote:
+    def test_known_library_names_its_package(self):
+        error = ("ImportError: librocrand.so.1: cannot open shared object file: "
+                 "No such file or directory")
+        note = cb.missing_library_note(error)
+        assert note == ("librocrand.so.1 is in the rocrand package: "
+                        "sudo apt install rocrand, then sudo ldconfig")
+
+    def test_unknown_library_points_to_apt_file(self):
+        note = cb.missing_library_note(
+            "ImportError: libfoo.so.2: cannot open shared object file")
+        assert "apt-file search libfoo.so.2" in note
+
+    def test_other_errors_get_no_note(self):
+        assert cb.missing_library_note("ModuleNotFoundError: ctranslate2") == ""
+
+    def test_rollback_warning_names_the_library_and_package(self, monkeypatch):
+        error = "ImportError: libhiprand.so.1: cannot open shared object file"
+        monkeypatch.setattr(doctor, "probe_ctranslate2",
+                            lambda **kw: doctor.Ct2Probe(False, error=error))
+        ok, why = cb.gpu_visible()
+        assert not ok
+        assert "libhiprand.so.1" in why and "sudo apt install hiprand" in why
+
+
 class TestCli:
+    @pytest.fixture(autouse=True)
+    def libraries_ready(self, monkeypatch):
+        """No real detection: the pre-check sees a ready machine."""
+        monkeypatch.setattr(gpu, "detect", lambda: gpu.GpuReport())
+
+    @pytest.mark.parametrize("args, code", [
+        (["install-rocm"], cb.EXIT_CPU),
+        (["install-rocm", "--no-fallback"], cb.EXIT_FAILED),
+    ])
+    def test_missing_libraries_stop_install_rocm_before_any_download(
+            self, monkeypatch, capsys, args, code):
+        monkeypatch.setattr(gpu, "detect", _missing_rocrand_report)
+        monkeypatch.setattr(cb, "install_rocm", lambda **kw: pytest.fail("swapped"))
+        assert cb.main(args) == code
+        err = capsys.readouterr().err
+        assert "librocrand.so.1 (rocrand)" in err
+        assert "sudo apt install rocrand && sudo ldconfig" in err
+        assert "Nothing was downloaded or changed" in err
+
     def test_install_rocm_failure_exits_cpu(self, monkeypatch, capsys):
         def fail(**kwargs):
             raise cb.BackendError("no network")
@@ -324,6 +379,17 @@ class TestDoctorFix:
         def eof(question):
             raise EOFError
         doctor.run_fix({}, out=io.StringIO(), ask=eof, report=rocm_report)
+
+    def test_missing_libraries_install_nothing(self, stamp, monkeypatch):
+        monkeypatch.setattr(gpu, "installed_ct2_flavor", lambda: ("pypi", "4.9.1"))
+        monkeypatch.setattr(cb, "install_rocm", lambda **kw: pytest.fail("ran"))
+        out = io.StringIO()
+        doctor.run_fix({}, out=out, ask=lambda q: pytest.fail("asked"),
+                       report=_missing_rocrand_report())
+        text = out.getvalue()
+        assert "Not installing the ROCm build" in text
+        assert "sudo apt install rocrand && sudo ldconfig" in text
+        assert "gpu_backend=cpu" in stamp.read_text()
 
     def test_failed_install_records_cpu(self, rocm_report, stamp, monkeypatch):
         monkeypatch.setattr(gpu, "installed_ct2_flavor", lambda: ("pypi", "4.9.1"))

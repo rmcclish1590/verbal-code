@@ -28,6 +28,7 @@ import contextlib
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,48 @@ ROCM_WHEEL_SHA256 = {
     "cp315t": "d02845c30bb3e9dc32c765e34afeab2a9ff2f9a39c10c09819111ca3fbe3ab71",
 }
 _ZIP_MEMBER_DIR = "temp-linux"
+
+# The shared libraries the pinned wheel needs at import (MCC-201). The
+# wheel bundles no ROCm, and rocm-hip-runtime alone ships only the first
+# entry, so detection checks this whole chain before the wheel is swapped
+# in (gpu._check_rocm_libraries).
+#
+# ROCM_WHEEL_NEEDS is libctranslate2's own DT_NEEDED list, minus glibc and
+# the toolchain runtime (readelf -d on the wheel's libctranslate2).
+# ROCM_LIBRARIES maps each library reached from those to the Ubuntu 24.04
+# package that ships it (dpkg -S, ROCm 7.2.1 from repo.radeon.com) and to
+# the libraries it needs in turn (readelf -d on each). Detection reads the
+# real DT_NEEDED entries of every library it finds, so the "needs" column
+# matters only for a library that is itself missing: it names that
+# library's dependencies in the same pass. Note that the hiprand package
+# does not depend on rocrand.
+#
+# Review both whenever the pin changes (CLAUDE.md): readelf -d the new
+# wheel's libctranslate2, then `ldd` each ROCm library it names.
+ROCM_WHEEL_NEEDS = ("libamdhip64.so.7", "libhipblas.so.3", "libhiprand.so.1")
+ROCM_LIBRARIES: dict[str, tuple[str, tuple[str, ...]]] = {
+    # library: (apt package, ROCm libraries it needs)
+    "libamdhip64.so.7": ("hip-runtime-amd", (
+        "libhsa-runtime64.so.1", "librocprofiler-register.so.0")),
+    "libhsa-runtime64.so.1": ("hsa-rocr", ("librocprofiler-register.so.0",)),
+    "librocprofiler-register.so.0": ("rocprofiler-register", ()),
+    "libhipblas.so.3": ("hipblas", ("librocblas.so.5", "librocsolver.so.0")),
+    "librocsolver.so.0": ("rocsolver", ("librocblas.so.5",)),
+    "librocblas.so.5": ("rocblas", ("libhipblaslt.so.1",)),
+    "libhipblaslt.so.1": ("hipblaslt", ("librocroller.so.1", "libroctx64.so.4")),
+    "librocroller.so.1": ("hipblaslt", ("libamd_comgr.so.3",)),
+    "libroctx64.so.4": ("roctracer", ()),
+    "libamd_comgr.so.3": ("comgr", ()),
+    "libhiprand.so.1": ("hiprand", ("librocrand.so.1",)),
+    "librocrand.so.1": ("rocrand", ()),
+    # Distribution libraries the ROCm ones link.
+    "libnuma.so.1": ("libnuma1", ()),
+    "libelf.so.1": ("libelf1t64", ()),
+    "libdrm.so.2": ("libdrm2", ()),
+    "libdrm_amdgpu.so.1": ("libdrm-amdgpu1", ()),
+    "libz.so.1": ("zlib1g", ()),
+    "libzstd.so.1": ("libzstd1", ()),
+}
 
 # Inside the app's data dir, not ~/.cache/verbal-code: update.sh checksums
 # the cache dirs as user data and must not see its own wheel there
@@ -232,6 +275,25 @@ def installed_version() -> str | None:
         return None
 
 
+_MISSING_LIBRARY = re.compile(
+    r"(lib[\w.+-]+\.so(?:\.\d+)*): cannot open shared object file"
+)
+
+
+def missing_library_note(error: str) -> str:
+    """For an ImportError naming a library the loader can't find, which
+    package ships it and how to install it; "" for any other error."""
+    match = _MISSING_LIBRARY.search(error)
+    if match is None:
+        return ""
+    lib = match.group(1)
+    package = ROCM_LIBRARIES.get(lib, ("", ()))[0]
+    if package:
+        return (f"{lib} is in the {package} package: sudo apt install {package}, "
+                "then sudo ldconfig")
+    return f"{lib} is not installed; find its package with apt-file search {lib}"
+
+
 def gpu_visible(
     run: RunFn = subprocess.run, python: str = sys.executable,
     env: dict[str, str] | None = None,
@@ -245,7 +307,9 @@ def gpu_visible(
 
     probe = probe_ctranslate2(run=run_with_env, python=python)
     if not probe.imported:
-        return False, f"import ctranslate2 failed: {probe.error}"
+        note = missing_library_note(probe.error)
+        return False, f"import ctranslate2 failed: {probe.error}" + (
+            f" ({note})" if note else "")
     if probe.device_count < 1:
         return False, "ctranslate2 sees no GPU device"
     return True, ""
@@ -363,6 +427,13 @@ def _cmd_install_rocm(args: argparse.Namespace) -> int:
         _log(f"Warning: the pinned ROCm ctranslate2 {ROCM_VERSION} is outside "
              "faster-whisper's ctranslate2 requirement; pip will replace it. "
              "Bump the pin in verbal_code/ct2_backend.py.")
+    # Missing or uncached ROCm libraries would make the swapped-in wheel
+    # fail to import: say which, and download and change nothing (MCC-201).
+    report = gpu.detect()
+    if report.library_problems():
+        _log(f"ROCm backend not installed: {report.runtime_detail}. "
+             f"Fix: {report.fix}. Nothing was downloaded or changed.")
+        return EXIT_FAILED if args.no_fallback else EXIT_CPU
     try:
         wheel = install_rocm(cache_dir=args.cache_dir,
                              fallback=not args.no_fallback, env=_rocm_env(args))

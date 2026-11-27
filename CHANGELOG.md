@@ -78,6 +78,20 @@ below as MCC-NN).
   ROCm install whose libraries load only from `/opt/rocm/lib`, the
   launcher puts that directory on `LD_LIBRARY_PATH`; nobody else's
   launcher changes (MCC-198).
+- GPU detection now checks every library the ROCm build of CTranslate2
+  loads, not only the HIP runtime: hipBLAS and hipRAND, and what those
+  need in turn, such as rocRAND (which the `hiprand` package doesn't pull
+  in) and rocBLAS. It finds all of them in one pass. Each problem is named
+  with its fix. A missing library gives the apt package to install. A
+  library that is installed but missing from the loader cache gives
+  `sudo ldconfig`. Nothing is installed or run with `sudo` for you.
+  `./install.sh` runs this check before it downloads anything, so a
+  machine with missing libraries stays on CPU with one hint, instead of
+  swapping the wheel in and rolling it back. `./update.sh` and
+  `verbal-code --doctor --fix` check first too. `--doctor` lists each
+  library with its status and package, then the fix commands. When
+  `import ctranslate2` still fails on a missing library, the warning
+  names the library and its package (MCC-201).
 
 ### Security
 
