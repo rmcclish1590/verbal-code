@@ -238,11 +238,19 @@ works exactly as on CPU.
 **Requirements**
 
 - x86_64, Python 3.10–3.15.
-- AMD: **ROCm 7.2 or newer**, including the hipBLAS and hipRAND libraries
-  (the build links `libamdhip64.so.7`, `libhipblas.so.3` and
-  `libhiprand.so.1`). The `rocm-hip-runtime` package alone isn't enough:
-  `sudo apt install hipblas hiprand` from AMD's ROCm repository. Your user
-  must be in the `render` and `video` groups
+- AMD: **ROCm 7.2 or newer, with more than the basic runtime.** The
+  `rocm-hip-runtime` package alone isn't enough. The build links
+  `libamdhip64.so.7`, `libhipblas.so.3` and `libhiprand.so.1`, and those
+  need rocBLAS, rocSOLVER, hipBLASLt and rocRAND in turn. The `hiprand`
+  package doesn't pull in `rocrand`, so name it yourself. From AMD's ROCm
+  repository (Ubuntu 24.04 / Mint 22 package names):
+
+  ```bash
+  sudo apt install rocm-hip-runtime hipblas hiprand rocrand
+  sudo ldconfig   # refresh the loader cache so the new libraries are found
+  ```
+
+  Your user must be in the `render` and `video` groups
   (`sudo usermod -aG render,video $USER`, then log out and in).
 - NVIDIA: the driver (`nvidia-smi` works) plus the CUDA 12 cuBLAS and
   cuDNN 9 libraries, either system-wide or as the
@@ -253,8 +261,12 @@ works exactly as on CPU.
   Linux Mint. Mint 22 (Ubuntu 24.04-based) works in practice but isn't
   AMD-certified. Detection is runtime-based, not distro-based.
 
-The installer never installs drivers, ROCm or CUDA itself; it tells you
-what's missing.
+The installer never installs drivers, ROCm or CUDA itself, and never runs
+`sudo`. It checks every library the ROCm build would load before
+downloading anything. If one is missing, Whisper stays on CPU and the
+installer prints the exact fix: the packages to install, or `sudo ldconfig`
+when a library is installed but the loader cache predates it. After you
+run the fix, rerun `./install.sh` or `verbal-code --doctor --fix`.
 
 **Choosing a model.** Start with `distil-small.en`. The installer's model
 menu adds "Whisper distil-small.en on your GPU" (option 7) on a GPU
@@ -268,10 +280,20 @@ there.
 ```bash
 rocminfo | grep -E 'Marketing Name|Name: +gfx'   # AMD: the GPU and its gfx target
 verbal-code --doctor                            # ends with "Verdict: GPU OK"
+
+# CTranslate2 itself, with the app's own interpreter (the system python3
+# doesn't have ctranslate2):
+~/.local/share/verbal-code/venv/bin/python -c \
+    'import ctranslate2; print(ctranslate2.get_cuda_device_count())'   # 1 or more
+
+# AMD: any ROCm library the loader can't find
+ldd /opt/rocm/lib/libhipblas.so.3 /opt/rocm/lib/libhiprand.so.1 | grep 'not found'
 ```
 
 The doctor lists the detected GPUs (gfx target or compute capability, VRAM
-used/total), the ROCm/CUDA runtime status, the installed CTranslate2 build
+used/total), the ROCm/CUDA runtime status, each ROCm library the GPU build
+loads (ok, missing with its package, or not in the loader cache) with the
+commands to fix it, the installed CTranslate2 build
 against the one the install recorded, the GPU count CTranslate2 sees, the
 relevant environment variables and the device Whisper will use. Its last
 line is `GPU OK`, `CPU (no GPU)` or `CPU (GPU problem: …, fix: …)`, and it
