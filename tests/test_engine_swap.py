@@ -101,6 +101,7 @@ def _make_switch_app(tmp_path, engine="whisper", streaming=True):
     app._streaming_enabled = streaming
     app._model_switch_lock = threading.Lock()
     app._dictation_lock = threading.Lock()
+    app._gpu_fallback_notified = False
     app.transcriber = create_transcriber(app.config)
     app.transcriber.load_model()
     app._live_injection = streaming and app.transcriber.supports_live_streaming
@@ -293,6 +294,7 @@ def _make_dictation_app(engine, audio):
     app.tray = _FakeTray()
     app._TrayState = _TrayState
     app._dictation_lock = threading.Lock()
+    app._gpu_fallback_notified = False
     app._recording = False
     app._processing = False
     app._record_start = 0.0

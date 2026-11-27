@@ -50,11 +50,12 @@ class _ImmediateGLib:
 _MODEL_MENU = [(engine, models) for engine, models in AVAILABLE_MODELS.items()]
 
 
-def _tray(current, selected):
+def _tray(current, selected, gpu_engines=frozenset()):
     tray = SystemTray(
         on_model_selected=lambda engine, model: selected.append((engine, model)),
         model_menu=_MODEL_MENU,
         current_model=current,
+        gpu_engines=gpu_engines,
     )
     tray._gtk = _FakeGtk
     tray._glib = _ImmediateGLib
@@ -104,3 +105,18 @@ class TestModelMenu:
             ("vosk", "vosk-model-small-en-us-0.15"),
             ("parakeet", "nemo-parakeet-tdt-0.6b-v3"),
         ]
+
+
+class TestGpuLabel:
+    def test_gpu_engine_models_are_labelled(self):
+        tray = _tray(("whisper", "distil-small.en"), [],
+                     gpu_engines=frozenset({"whisper"}))
+        root = tray._build_model_submenu()
+        for label in _labels(root):
+            assert label.endswith(" (GPU)") == (": " in label and
+                                                label.split(": ")[0].strip()
+                                                .lstrip("✓ ") == "whisper")
+
+    def test_no_label_without_gpu(self):
+        root = _tray(("whisper", "distil-small.en"), [])._build_model_submenu()
+        assert not any("(GPU)" in label for label in _labels(root))

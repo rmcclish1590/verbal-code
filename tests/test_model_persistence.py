@@ -74,6 +74,7 @@ def _make_app(config_path, config):
     app._live_injection = False
     app._model_switch_lock = threading.Lock()
     app._dictation_lock = threading.Lock()
+    app._gpu_fallback_notified = False
     app.transcriber = _FakeTranscriber()
     return app
 

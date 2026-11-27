@@ -137,6 +137,11 @@ echo "  3) Parakeet TDT-CTC 110M - English, featherweight for slower CPUs (~140 
 echo "  4) Another engine or model (sherpa-onnx live streaming, whisper, ...)"
 echo "  5) Keep the current selection ($CURRENT_MODEL)"
 echo "  6) Skip the download (it happens on the app's first start)"
+# Appended, so 1-6 keep their meaning for piped installs (MCC-197). The
+# default stays Parakeet (on CPU) either way.
+if [ "$CT2_BACKEND" = rocm ] || [ "$CT2_BACKEND" = cuda ]; then
+    echo "  7) Whisper distil-small.en on your GPU ($CT2_BACKEND) - fast English (~330 MB)"
+fi
 echo ""
 # `|| true`: a piped install (e.g. `echo 1 | ./install.sh`) hits EOF here
 # and takes the default rather than aborting under `set -e`.
@@ -169,6 +174,13 @@ case "$MODEL_CHOICE" in
         ;;
     5) ;;
     6) DOWNLOAD=false ;;
+    7)
+        if [ "$CT2_BACKEND" = rocm ] || [ "$CT2_BACKEND" = cuda ]; then
+            MODEL_ARGS=(--set-model whisper distil-small.en --whisper-gpu)
+        else
+            warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)"
+        fi
+        ;;
     *) warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)" ;;
 esac
 
