@@ -81,6 +81,19 @@ info "Installing verbal-code and its dependencies in editable mode..."
 deploy_package "$SCRIPT_DIR" "$EXTRAS"
 ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 
+# ── GPU backend (MCC-195) ──
+# No prompt: detection picks the backend; VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu
+# overrides it. A machine without a GPU sees nothing new here.
+detect_gpu_backend
+mapfile -t GPU_DESCRIPTION < <(cd / && "$PYTHON" -m verbal_code.ct2_backend describe 2>/dev/null || true)
+if [ "$GPU_BACKEND" != cpu ]; then
+    ok "${GPU_DESCRIPTION[0]:-GPU found}"
+elif [ -n "${GPU_DESCRIPTION[1]:-}" ]; then
+    # A GPU without a working runtime: one actionable line.
+    warn "${GPU_DESCRIPTION[1]}"
+fi
+install_ct2_backend "$GPU_BACKEND"
+
 # ── Config file ──
 CONFIG_CREATED=false
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
@@ -169,7 +182,8 @@ info "Installing the launcher, desktop entry and icon..."
 install_app_files "$SCRIPT_DIR"
 ok "Launcher: $LAUNCHER"
 ok "Desktop entry and icon installed"
-write_stamp "$(source_version "$SCRIPT_DIR")" "$(source_commit "$SCRIPT_DIR")"
+write_stamp "$(source_version "$SCRIPT_DIR")" "$(source_commit "$SCRIPT_DIR")" \
+    "$CT2_BACKEND" "$CT2_WHEEL" "$ROCM_LD_PATH"
 
 # ── PATH check ──
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then

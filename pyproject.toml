@@ -8,6 +8,10 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0,<7",
+    # Pulls in PyPI's ctranslate2 (CUDA build). Don't add ctranslate2 here:
+    # AMD GPUs get the ROCm build, pinned and hash-verified in
+    # verbal_code/ct2_backend.py, which install.sh/update.sh swap in. PEP 508
+    # can't select a wheel by GPU (MCC-195).
     "faster-whisper>=1.0.0,<2",
     # Parakeet TDT (INT8, batch) via onnxruntime; "hub" pulls models from
     # Hugging Face on first use.

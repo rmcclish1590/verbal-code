@@ -1192,6 +1192,12 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "when the installed GPU backend is not working",
     )
     parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="With --doctor: install the CTranslate2 build matching the "
+        "detected GPU (asks before downloading), then report again",
+    )
+    parser.add_argument(
         "--gpu-detect",
         action="store_true",
         help="Print one machine-readable line with the detected GPU backend "
@@ -1218,9 +1224,9 @@ def main() -> None:
     if args.doctor:
         # Like --list-devices, skips validate_config: the doctor must work
         # when the config or the engine is what is broken.
-        from verbal_code.doctor import run_doctor
+        from verbal_code.doctor import run_doctor, run_fix
 
-        sys.exit(run_doctor(config))
+        sys.exit(run_fix(config) if args.fix else run_doctor(config))
     if args.list_devices:
         _run_list_devices()
         sys.exit(0)
