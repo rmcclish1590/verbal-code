@@ -136,6 +136,42 @@ WHISPER_COMPUTE_TYPES = (
 _DOCTOR_HINT = "Run 'verbal-code --doctor' for details."
 
 
+# Approximate float16 weight size of each Whisper model in MiB (parameter
+# count x 2 bytes), plus what decoding needs on top: the HIP/CUDA context,
+# activations and the batched beams. Rough on purpose; the pre-check only
+# has to catch a GPU that is clearly full (MCC-198). int8 halves the
+# weights, float32 doubles them.
+_WHISPER_FP16_WEIGHTS_MIB: dict[str, int] = {
+    "base.en": 150,
+    "distil-small.en": 330,
+    "small.en": 490,
+    "distil-medium.en": 790,
+    "distil-large-v3.5": 1510,
+    "large-v3-turbo": 1620,
+}
+_WHISPER_WORKING_MIB = 400
+_UNKNOWN_MODEL_FP16_MIB = 1620
+
+
+def whisper_vram_estimate(model: str, compute_type: str) -> int:
+    """Bytes of free VRAM a Whisper model should have to load and decode."""
+    weights = _WHISPER_FP16_WEIGHTS_MIB.get(model, _UNKNOWN_MODEL_FP16_MIB)
+    if compute_type.startswith("int8"):
+        weights //= 2
+    elif compute_type == "float32":
+        weights *= 2
+    return (weights + _WHISPER_WORKING_MIB) * 1024 * 1024
+
+
+class _Fallback:
+    """Why Whisper is on CPU; ``warn`` when that's worth a WARNING (a GPU
+    that should have worked) rather than INFO (no GPU at all)."""
+
+    def __init__(self, reason: str, warn: bool = False):
+        self.reason = reason
+        self.warn = warn
+
+
 def cuda_device_count() -> tuple[int, str]:
     """(GPUs CTranslate2 can see, why none) — CUDA or ROCm alike. Never
     raises: a broken GPU build reads as zero devices."""
@@ -218,6 +254,7 @@ class WhisperTranscriber(TranscriberBase):
         #: ``device: cuda`` that couldn't be honoured, or a mid-session GPU
         #: failure. A machine without a GPU under ``auto`` is not an error.
         self.fallback_notify = False
+        self._gpu_device: Any = None  # the GpuDevice in use, for the log line
         self._model: Any = None
         self._batched: Any = None
         self._lock = threading.Lock()
@@ -238,29 +275,58 @@ class WhisperTranscriber(TranscriberBase):
             return "int8"  # a GPU-only type on the CPU fallback
         return requested
 
-    def _plan_device(self) -> tuple[str, str | None]:
+    def _plan_device(self) -> tuple[str, _Fallback | None]:
         """("cuda", None) to try the GPU, else ("cpu", why the GPU is out —
         None when the config asked for CPU)."""
+        self._gpu_device = None
         if self.requested_device == "cpu":
             return "cpu", None
         count, error = cuda_device_count()
         if count > self.device_index:
+            shortfall = self._vram_shortfall()
+            if shortfall:
+                return "cpu", _Fallback(shortfall, warn=True)
             return "cuda", None
         if count:
-            return "cpu", (f"stt.whisper.device_index is {self.device_index} "
-                           f"but only {count} GPU(s) are visible")
+            return "cpu", _Fallback(
+                f"stt.whisper.device_index is {self.device_index} but only "
+                f"{count} GPU(s) are visible", warn=True)
         replaced = _replaced_rocm_reason()
         if replaced:
-            return "cpu", replaced
-        return "cpu", f"no usable GPU ({error})" if error else "no usable GPU"
+            return "cpu", _Fallback(replaced, warn=True)
+        return "cpu", _Fallback(
+            f"no usable GPU ({error})" if error else "no usable GPU")
 
-    def _gpu_label(self) -> str:
-        """``rocm, gfx1200, idx 0`` for the startup line; best effort."""
+    def _vram_shortfall(self) -> str | None:
+        """MCC-198: the reason to skip the GPU when it lacks the free memory
+        this model needs (another app, typically Ollama, holds it); None
+        when it fits or free VRAM can't be read. A failed load would also
+        fall back, but a load that *nearly* fits tends to fail later, in a
+        dictation, instead."""
         from verbal_code import gpu
 
         report = gpu.detect()
-        device = next((d for d in report.devices
-                       if d.index == self.device_index and d.supported), None)
+        self._gpu_device = next(
+            (d for d in report.devices
+             if d.index == self.device_index and d.supported), None)
+        free = self._gpu_device.vram_free if self._gpu_device else None
+        if free is None:
+            return None
+        need = whisper_vram_estimate(self.model_size,
+                                     self._compute_type_for("cuda"))
+        if free >= need:
+            return None
+        mib = 1024 * 1024
+        return (
+            f"not enough free GPU memory for Whisper {self.model_size} "
+            f"({free // mib} MiB free, ~{need // mib} MiB needed): another GPU "
+            "app (for example Ollama) is using VRAM. Free it with "
+            "`ollama stop <model>`, or set OLLAMA_KEEP_ALIVE shorter"
+        )
+
+    def _gpu_label(self) -> str:
+        """``rocm, gfx1200, idx 0`` for the startup line; best effort."""
+        device = getattr(self, "_gpu_device", None)
         if device is None:
             return f"idx {self.device_index}"
         backend = "rocm" if device.vendor == "amd" else "cuda"
@@ -311,7 +377,9 @@ class WhisperTranscriber(TranscriberBase):
                 self._warmup(strict=True)
             except Exception as exc:  # noqa: BLE001 — any GPU failure → CPU
                 self._release()
-                reason = f"GPU load failed ({type(exc).__name__}: {_first_line(exc)})"
+                reason = _Fallback(
+                    f"GPU load failed ({type(exc).__name__}: {_first_line(exc)})",
+                    warn=True)
             else:
                 self.device, self.compute_type = "cuda", compute_type
                 self.fallback_reason = None
@@ -319,12 +387,14 @@ class WhisperTranscriber(TranscriberBase):
                 return
         self._fall_back_to_cpu(reason)
 
-    def _fall_back_to_cpu(self, reason: str | None, mid_session: bool = False) -> None:
+    def _fall_back_to_cpu(
+        self, fallback: _Fallback | None, mid_session: bool = False
+    ) -> None:
         compute_type = self._compute_type_for("cpu")
-        if reason is not None:
+        if fallback is not None:
+            reason = fallback.reason
             self.fallback_reason = reason
             explicit = self.requested_device == "cuda"
-            gpu_failed = reason.startswith("GPU ") or mid_session
             self.fallback_notify = explicit or mid_session
             message = "%s; falling back to CPU %s. %s"
             if mid_session:
@@ -332,7 +402,7 @@ class WhisperTranscriber(TranscriberBase):
                            "on CPU for this session. %s")
             if explicit:
                 logger.error(message, reason, compute_type, _DOCTOR_HINT)
-            elif gpu_failed or "pip upgrade" in reason:
+            elif fallback.warn or mid_session:
                 logger.warning(message, reason, compute_type, _DOCTOR_HINT)
             else:
                 logger.info("Whisper on CPU: %s", reason)
@@ -386,8 +456,8 @@ class WhisperTranscriber(TranscriberBase):
         except Exception as exc:
             if self.device != "cuda":
                 raise
-            reason = (f"GPU transcription failed ({type(exc).__name__}: "
-                      f"{_first_line(exc)})")
+            reason = _Fallback(f"GPU transcription failed ({type(exc).__name__}: "
+                               f"{_first_line(exc)})", warn=True)
             self._release()
             self._fall_back_to_cpu(reason, mid_session=True)
             return self._transcribe_batch(audio)
