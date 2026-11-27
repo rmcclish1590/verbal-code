@@ -32,7 +32,8 @@ _CT2_PROBE = (
     "import ctranslate2; print(ctranslate2.__version__); "
     "print(ctranslate2.get_cuda_device_count())"
 )
-FIX_HINT = "./install.sh"
+FIX_HINT = "verbal-code --doctor --fix"
+_UNSET = object()  # run_doctor(marker=None) means "no marker", not "read it"
 
 
 @dataclass
@@ -114,7 +115,7 @@ def verdict(
         if report.vendor == "none" and not expects_gpu:
             return Verdict(False, "CPU (no GPU)", code)
         reason = report.runtime_detail
-        fix = report.hint or "see README → GPU acceleration"
+        fix = report.fix or "see README → GPU acceleration"
     elif flavor == "missing":
         reason = "ctranslate2 is not installed"
         fix = "./install.sh"
@@ -123,7 +124,7 @@ def verdict(
         fix = FIX_HINT
     elif not wheel_matches and report.recommended_backend == "rocm":
         reason = "the ROCm build of CTranslate2 is not installed"
-        fix = FIX_HINT
+        fix = f"./install.sh or {FIX_HINT}"
     elif not wheel_matches:
         reason = "the ROCm build of CTranslate2 is installed on a non-AMD setup"
         fix = FIX_HINT
@@ -157,7 +158,7 @@ def run_doctor(
     report: gpu.GpuReport | None = None,
     probe: Ct2Probe | None = None,
     flavor: tuple[str, str | None] | None = None,
-    marker: str | None = None,
+    marker: str | None | object = _UNSET,
     env: dict[str, str] | None = None,
 ) -> int:
     """Print the report and return the exit code (R9.5)."""
@@ -165,7 +166,7 @@ def run_doctor(
     env = dict(os.environ) if env is None else env
     report = report or gpu.detect()
     flavor_name, flavor_version = flavor or gpu.installed_ct2_flavor()
-    marker = marker if marker is not None else gpu.read_marker()
+    marker = gpu.read_marker() if marker is _UNSET else marker
     probe = probe or probe_ctranslate2()
 
     def line(label: str, value: object) -> None:
@@ -224,3 +225,79 @@ def run_doctor(
     result = verdict(report, marker, flavor_name, probe)
     print(f"\nVerdict: {result.text}", file=out)
     return result.exit_code
+
+
+def _ask(question: str, ask: Callable[[str], str]) -> bool:
+    try:
+        return ask(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def run_fix(
+    config: dict,
+    out: TextIO | None = None,
+    ask: Callable[[str], str] = input,
+    report: gpu.GpuReport | None = None,
+) -> int:
+    """``--doctor --fix``: put the CTranslate2 build that matches the
+    detected GPU into the venv and record it, then rerun the doctor.
+
+    Uses the same pinned, hash-verified install as install.sh
+    (verbal_code.ct2_backend). Runs in the venv, never needs root, and asks
+    before downloading or replacing anything.
+    """
+    from verbal_code import ct2_backend
+
+    out = out or sys.stdout
+    report = report or gpu.detect()
+    flavor, version = gpu.installed_ct2_flavor()
+    print(f"Detected: {report.summary()}", file=out)
+
+    backend = "cpu"
+    wheel = None
+    if report.recommended_backend == "rocm":
+        if (flavor, version) == ("rocm", ct2_backend.ROCM_VERSION):
+            print("The pinned ROCm build of CTranslate2 is already installed.",
+                  file=out)
+            backend = "rocm"
+        elif _ask(
+            f"Install the ROCm build of CTranslate2 {ct2_backend.ROCM_VERSION} "
+            f"(a ~{ct2_backend.ROCM_ZIP_SIZE // 1_000_000} MB download unless "
+            "cached)?", ask,
+        ):
+            env = None
+            if report.needs_ld_library_path:
+                env = dict(os.environ)
+                env["LD_LIBRARY_PATH"] = gpu.ROCM_LIB_DIR
+            try:
+                wheel = ct2_backend.install_rocm(env=env)
+                backend = "rocm"
+                print(f"Installed {wheel}.", file=out)
+            except ct2_backend.BackendError as exc:
+                print(f"ROCm backend not installed: {exc}", file=out)
+        else:
+            print("Nothing changed.", file=out)
+            return run_doctor(config, out=out, report=report)
+    elif flavor == "rocm":
+        if not _ask("No usable AMD GPU now; reinstall PyPI's CTranslate2?", ask):
+            print("Nothing changed.", file=out)
+            return run_doctor(config, out=out, report=report)
+        try:
+            ct2_backend.install_pypi(version=ct2_backend.ROCM_VERSION)
+        except ct2_backend.BackendError as exc:
+            print(str(exc), file=out)
+            return 1
+    if report.recommended_backend == "cuda":
+        ok, why = ct2_backend.gpu_visible()
+        backend = "cuda" if ok else "cpu"
+        if not ok:
+            print(f"CUDA backend not usable: {why}", file=out)
+    if report.recommended_backend == "cpu" and report.hint:
+        print(report.hint, file=out)
+
+    if gpu.write_marker(backend, wheel,
+                        report.needs_ld_library_path and backend == "rocm"):
+        print(f"Recorded backend: {backend}", file=out)
+    print("", file=out)
+    return run_doctor(config, out=out, report=report)

@@ -62,6 +62,27 @@ class TestSetModel:
         # The in-memory config follows, so --download-model fetches the new one.
         assert config["stt"]["parakeet"]["model"] == "nemo-parakeet-tdt_ctc-110m"
 
+    def test_whisper_gpu_sets_device_and_compute_type(self, tmp_path, monkeypatch):
+        """The installer's GPU option (MCC-197) goes through update_config."""
+        monkeypatch.setattr("verbal_code.transcriber.installed_engines",
+                            lambda: ["whisper", "parakeet"])
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            'stt:\n  engine: "parakeet"  # keep me\n'
+            '  whisper:\n    device: "cpu"\n    compute_type: "int8"\n'
+        )
+        config = app.load_config(str(path))
+
+        app._run_set_model(config, str(path), "whisper", "distil-small.en",
+                           whisper_gpu=True)
+
+        assert "# keep me" in path.read_text()
+        saved = app.load_config(str(path))
+        assert saved["stt"]["engine"] == "whisper"
+        assert saved["stt"]["whisper"]["device"] == "auto"
+        assert saved["stt"]["whisper"]["compute_type"] == "auto"
+        assert config["stt"]["whisper"]["compute_type"] == "auto"
+
     def test_unknown_model_exits_without_writing(self, tmp_path, capsys):
         path = tmp_path / "config.yaml"
         path.write_text("stt: {}\n")

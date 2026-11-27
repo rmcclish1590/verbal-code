@@ -36,8 +36,22 @@ stt:
     # English-only distil model: near-small accuracy at a lower CPU cost.
     # Other good picks: "small.en" (more accurate, slower), "base.en" (faster).
     model: "distil-small.en"
+    # auto: the GPU when CTranslate2 can use one (NVIDIA CUDA or AMD ROCm),
+    # else CPU. "cuda" insists on the GPU (use "cuda" on AMD/ROCm too);
+    # "cpu" never touches it. Any GPU problem falls back to CPU and logs why;
+    # `verbal-code --doctor` explains it.
     device: "auto"
-    compute_type: "int8"
+    # auto: float16 on GPU (fast), int8 on CPU. An explicit value (int8,
+    # int8_float16, float16, float32, ...) is always used as given; int8 on a
+    # GPU works but is slower than float16.
+    compute_type: "auto"
+    # Which GPU, when there are several (0 = the first CTranslate2 sees).
+    device_index: 0
+    # GPU memory allocator (CTranslate2's CT2_CUDA_ALLOCATOR): null leaves
+    # CTranslate2's default, which on AMD/ROCm is already "cub_caching". Try
+    # "cuda_malloc_async" (NVIDIA) or "cub_caching" if you see garbage output
+    # or memory faults. An exported CT2_CUDA_ALLOCATOR wins over this.
+    ct2_allocator: null
     language: "en"
     # 2 is ~2x faster than 5 on CPU with negligible accuracy loss on short
     # dictations; raise to 5 if you notice misrecognitions on long sentences.

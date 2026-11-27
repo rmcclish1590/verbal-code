@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 import sys
 
 import pytest
@@ -310,3 +311,103 @@ class TestTemplatePresets:
             "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
         )
         validate_config(config)
+
+
+class TestWhisperDeviceConfig:
+    """MCC-197: stt.whisper.device / compute_type / device_index."""
+
+    def _config(self, **whisper):
+        return {"hotkey": {}, "stt": {"engine": "whisper", "whisper": whisper},
+                "audio": {}}
+
+    @pytest.mark.parametrize("device", ["auto", "cpu", "cuda"])
+    def test_known_devices_pass(self, device):
+        validate_config(self._config(device=device))
+
+    @pytest.mark.parametrize("device", ["gpu", "rocm", "CUDA", 0])
+    def test_unknown_device_is_rejected(self, device, caplog):
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(self._config(device=device))
+        assert "stt.whisper.device" in caplog.text
+        assert "'cuda' for AMD ROCm" in caplog.text
+
+    def test_unknown_compute_type_is_rejected(self, caplog):
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(self._config(compute_type="fp16"))
+        assert "stt.whisper.compute_type" in caplog.text
+
+    @pytest.mark.parametrize("compute_type", ["auto", "int8", "float16"])
+    def test_known_compute_types_pass(self, compute_type):
+        validate_config(self._config(compute_type=compute_type))
+
+    @pytest.mark.parametrize("index", [-1, 64, "0", True])
+    def test_bad_device_index_is_rejected(self, index):
+        with pytest.raises(SystemExit):
+            validate_config(self._config(device_index=index))
+
+    def test_device_index_in_range_passes(self):
+        validate_config(self._config(device_index=1))
+
+
+class TestCt2Allocator:
+    """MCC-198: stt.whisper.ct2_allocator reaches CTranslate2."""
+
+    def _write(self, tmp_path, allocator):
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            "hotkey: {}\naudio: {}\nstt:\n  engine: whisper\n  whisper:\n"
+            f"    ct2_allocator: {allocator}\n"
+        )
+        return path
+
+    def test_set_before_faster_whisper_is_imported(self, tmp_path, monkeypatch):
+        import importlib
+
+        from verbal_code import app
+
+        # setenv first so the undo restores "unset" after main() exports it.
+        monkeypatch.setenv("CT2_CUDA_ALLOCATOR", "placeholder")
+        monkeypatch.delenv("CT2_CUDA_ALLOCATOR")
+        path = self._write(tmp_path, "cuda_malloc_async")
+        seen: dict[str, object] = {}
+        real_import = importlib.import_module
+
+        def spy(name, *args, **kwargs):
+            if name in ("faster_whisper", "ctranslate2") and name not in seen:
+                seen[name] = os.environ.get("CT2_CUDA_ALLOCATOR")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib, "import_module", spy)
+        monkeypatch.setattr(app, "_run_test_inject", lambda config: None)
+        monkeypatch.setattr("sys.argv", ["verbal-code", "-c", str(path),
+                                         "--test-inject"])
+        with pytest.raises(SystemExit) as exit_info:
+            main()
+        assert exit_info.value.code == 0
+        assert seen["faster_whisper"] == "cuda_malloc_async"
+
+    def test_exported_variable_wins(self, monkeypatch):
+        from verbal_code.app import apply_ct2_environment
+
+        env = {"CT2_CUDA_ALLOCATOR": "cub_caching"}
+        apply_ct2_environment(
+            {"stt": {"whisper": {"ct2_allocator": "cuda_malloc_async"}}}, env)
+        assert env["CT2_CUDA_ALLOCATOR"] == "cub_caching"
+
+    def test_null_leaves_the_environment_alone(self):
+        from verbal_code.app import apply_ct2_environment
+
+        env: dict[str, str] = {}
+        apply_ct2_environment({"stt": {"whisper": {"ct2_allocator": None}}}, env)
+        assert env == {}
+
+    def test_unknown_allocator_is_rejected(self, caplog):
+        config = {"hotkey": {}, "audio": {},
+                  "stt": {"engine": "whisper", "whisper": {"ct2_allocator": "x"}}}
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(config)
+        assert "ct2_allocator" in caplog.text
+
+
+def test_allocator_does_not_leak_between_tests():
+    assert os.environ.get("CT2_CUDA_ALLOCATOR") != "cuda_malloc_async"

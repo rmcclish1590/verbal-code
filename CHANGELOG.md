@@ -21,6 +21,50 @@ below as MCC-NN).
   installed GPU backend isn't working. `verbal-code --gpu-detect` prints
   the same detection as one machine-readable line for the installer
   (MCC-194).
+- GPU-accelerated Whisper on AMD Radeon GPUs. On a machine with a
+  supported AMD GPU and the ROCm 7.2+ runtime, `./install.sh` now
+  replaces PyPI's CUDA-only CTranslate2 with the ROCm build from the
+  CTranslate2 release, pinned to one version and checked against SHA-256
+  hashes stored in the repo. It then verifies a GPU is visible. If any
+  step fails, the installer puts the PyPI build back and Whisper runs on
+  CPU. NVIDIA machines keep the PyPI build and are checked for the CUDA
+  12 libraries. Machines without a GPU install exactly as before. There is
+  no new prompt; set `VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu` to override
+  the detection. `verbal-code --doctor --fix` reruns the same step later,
+  for example after a pip upgrade replaced the ROCm build (MCC-195).
+- `./update.sh` keeps the GPU backend: when the deploy's pip run replaced
+  the ROCm build of CTranslate2 (or the pin moved), it reinstalls the
+  pinned wheel from the local cache before the health check. If that
+  fails, the whole update rolls back, so an update never silently drops
+  you to CPU. `--dry-run` shows the backend plan (keep / reinstall ROCm
+  wheel / none). A GPU added since the install is offered in the
+  summary, never switched to. `install.sh` and `update.sh` end with the
+  doctor's one-line GPU verdict. `uninstall.sh` removes the wheel cache
+  and the backend marker (MCC-196).
+- Whisper picks its device and precision automatically. `stt.whisper.device:
+  auto` uses the GPU when CTranslate2 can see one (`cuda` means the GPU on
+  AMD/ROCm too). The new `compute_type: auto` default means float16 on GPU
+  and int8 on CPU; an explicit value, such as an existing `int8`, is still
+  used as given. The new `stt.whisper.device_index` picks a GPU. Any GPU
+  problem falls back to CPU with one log line saying why: a failed load or
+  warmup, a device index that isn't there, or a ROCm build replaced by a
+  pip upgrade. A GPU failure in the middle of a dictation retries that
+  dictation on CPU, so nothing is lost, and Whisper stays on CPU for the
+  rest of the session. An explicit `device: cuda` that can't be honoured
+  logs an error and shows one tray notification. When the GPU is usable,
+  the tray's Model menu marks Whisper models "(GPU)", and the installer's
+  model menu adds a "Whisper distil-small.en on your GPU" choice as option
+  7. Options 1-6 are unchanged (MCC-197).
+- Before loading Whisper on the GPU, Verbal Code checks free VRAM (AMD
+  through sysfs, NVIDIA through `nvidia-smi`). If another app, typically
+  Ollama, holds too much of it, Whisper starts on CPU with a warning that
+  names the cause and the fix (`ollama stop <model>`, a shorter
+  `OLLAMA_KEEP_ALIVE`). Unreadable VRAM never blocks the GPU. The new
+  `stt.whisper.ct2_allocator` (or an exported `CT2_CUDA_ALLOCATOR`) sets
+  CTranslate2's GPU allocator before CTranslate2 is first imported. On a
+  ROCm install whose libraries load only from `/opt/rocm/lib`, the
+  launcher puts that directory on `LD_LIBRARY_PATH`; nobody else's
+  launcher changes (MCC-198).
 
 ### Security
 

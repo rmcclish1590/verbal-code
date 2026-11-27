@@ -125,6 +125,82 @@ class TranscriberBase(ABC):
         self.unload_model()
 
 
+# CTranslate2 compute types that run on CPU. A GPU fallback keeps an
+# explicit one of these and otherwise uses int8.
+_CPU_COMPUTE_TYPES = frozenset({"int8", "int8_float32", "int16", "float32"})
+WHISPER_DEVICES = ("auto", "cpu", "cuda")
+WHISPER_COMPUTE_TYPES = (
+    "auto", "default", "int8", "int8_float32", "int8_float16", "int8_bfloat16",
+    "int16", "float16", "bfloat16", "float32",
+)
+_DOCTOR_HINT = "Run 'verbal-code --doctor' for details."
+
+
+# Approximate float16 weight size of each Whisper model in MiB (parameter
+# count x 2 bytes), plus what decoding needs on top: the HIP/CUDA context,
+# activations and the batched beams. Rough on purpose; the pre-check only
+# has to catch a GPU that is clearly full (MCC-198). int8 halves the
+# weights, float32 doubles them.
+_WHISPER_FP16_WEIGHTS_MIB: dict[str, int] = {
+    "base.en": 150,
+    "distil-small.en": 330,
+    "small.en": 490,
+    "distil-medium.en": 790,
+    "distil-large-v3.5": 1510,
+    "large-v3-turbo": 1620,
+}
+_WHISPER_WORKING_MIB = 400
+_UNKNOWN_MODEL_FP16_MIB = 1620
+
+
+def whisper_vram_estimate(model: str, compute_type: str) -> int:
+    """Bytes of free VRAM a Whisper model should have to load and decode."""
+    weights = _WHISPER_FP16_WEIGHTS_MIB.get(model, _UNKNOWN_MODEL_FP16_MIB)
+    if compute_type.startswith("int8"):
+        weights //= 2
+    elif compute_type == "float32":
+        weights *= 2
+    return (weights + _WHISPER_WORKING_MIB) * 1024 * 1024
+
+
+class _Fallback:
+    """Why Whisper is on CPU; ``warn`` when that's worth a WARNING (a GPU
+    that should have worked) rather than INFO (no GPU at all)."""
+
+    def __init__(self, reason: str, warn: bool = False):
+        self.reason = reason
+        self.warn = warn
+
+
+def cuda_device_count() -> tuple[int, str]:
+    """(GPUs CTranslate2 can see, why none) — CUDA or ROCm alike. Never
+    raises: a broken GPU build reads as zero devices."""
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count(), ""
+    except Exception as exc:  # noqa: BLE001 — any failure means "no GPU"
+        return 0, f"{type(exc).__name__}: {_first_line(exc)}"
+
+
+def _replaced_rocm_reason() -> str | None:
+    """R4.17: the install chose ROCm but the venv's CTranslate2 is PyPI's
+    again (a manual ``pip install -U faster-whisper``). Reads two files."""
+    from verbal_code import gpu
+
+    if gpu.read_marker() != "rocm":
+        return None
+    if gpu.installed_ct2_flavor()[0] == "rocm":
+        return None
+    return ("GPU backend was replaced by a pip upgrade; "
+            "run `verbal-code --doctor --fix`")
+
+
+def _first_line(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text.splitlines()[0] if text else type(exc).__name__
+
+
 class WhisperTranscriber(TranscriberBase):
     """faster-whisper backed transcriber for push-to-talk dictation.
 
@@ -133,32 +209,52 @@ class WhisperTranscriber(TranscriberBase):
     with Silero VAD and decodes the segments in parallel batches.  This is
     several times faster than a plain sequential ``transcribe`` on multi-segment
     audio and removes the need for a separate live-streaming pass.
+
+    GPU use (MCC-197): ``device`` ``auto`` runs on a GPU CTranslate2 can see
+    (NVIDIA CUDA or AMD ROCm, both called ``cuda`` here) and on CPU
+    otherwise; ``cuda`` insists on the GPU but still falls back so dictation
+    keeps working. Any GPU failure — while loading, warming up, or in the
+    middle of a session — drops to CPU for the rest of the session with one
+    log line saying why; ``device``/``compute_type`` then report what is
+    actually in use and ``fallback_reason`` the cause.
     """
 
     def __init__(
         self,
         model_size: str = "distil-small.en",
         device: str = "auto",
-        compute_type: str = "int8",
+        compute_type: str = "auto",
         language: str = "en",
         beam_size: int = 2,
         batch_size: int = 8,
         initial_prompt: str = "",
         sample_rate: int = _DEFAULT_SAMPLE_RATE,
         cpu_threads: int | None = None,
+        device_index: int = 0,
     ):
         self.model_size = model_size
+        # What the config asked for; device/compute_type below are what runs.
+        self.requested_device = device
+        self.requested_compute_type = compute_type
         self.device = device
+        self.compute_type = compute_type
+        self.device_index = device_index
         # CTranslate2 defaults to 4 threads; one per physical core is faster
         # on anything bigger (6 on a Ryzen 5 5600G).
         self.cpu_threads = cpu_threads or physical_core_count()
-        self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
         self.batch_size = batch_size
         # faster-whisper expects None (not "") when there is no prompt.
         self.initial_prompt = initial_prompt or None
         self.sample_rate = sample_rate
+        #: Why a GPU-capable config is running on CPU, or None.
+        self.fallback_reason: str | None = None
+        #: True when the fallback deserves a tray notification: an explicit
+        #: ``device: cuda`` that couldn't be honoured, or a mid-session GPU
+        #: failure. A machine without a GPU under ``auto`` is not an error.
+        self.fallback_notify = False
+        self._gpu_device: Any = None  # the GpuDevice in use, for the log line
         self._model: Any = None
         self._batched: Any = None
         self._lock = threading.Lock()
@@ -168,31 +264,163 @@ class WhisperTranscriber(TranscriberBase):
         self._last_stream_text: str = ""
         self._stream_interval_samples = int(_STREAM_INTERVAL_SECONDS * sample_rate)
 
-    def load_model(self) -> None:
-        """Download (if needed) and load the Whisper model, then warm it up."""
+    # ── Device selection ──
+
+    def _compute_type_for(self, device: str) -> str:
+        requested = self.requested_compute_type or "auto"
+        if requested == "auto":
+            return "float16" if device == "cuda" else "int8"
+        if device == "cpu" and self.requested_device != "cpu" \
+                and requested not in _CPU_COMPUTE_TYPES:
+            return "int8"  # a GPU-only type on the CPU fallback
+        return requested
+
+    def _plan_device(self) -> tuple[str, _Fallback | None]:
+        """("cuda", None) to try the GPU, else ("cpu", why the GPU is out —
+        None when the config asked for CPU)."""
+        self._gpu_device = None
+        if self.requested_device == "cpu":
+            return "cpu", None
+        count, error = cuda_device_count()
+        if count > self.device_index:
+            shortfall = self._vram_shortfall()
+            if shortfall:
+                return "cpu", _Fallback(shortfall, warn=True)
+            return "cuda", None
+        if count:
+            return "cpu", _Fallback(
+                f"stt.whisper.device_index is {self.device_index} but only "
+                f"{count} GPU(s) are visible", warn=True)
+        replaced = _replaced_rocm_reason()
+        if replaced:
+            return "cpu", _Fallback(replaced, warn=True)
+        return "cpu", _Fallback(
+            f"no usable GPU ({error})" if error else "no usable GPU")
+
+    def _vram_shortfall(self) -> str | None:
+        """MCC-198: the reason to skip the GPU when it lacks the free memory
+        this model needs (another app, typically Ollama, holds it); None
+        when it fits or free VRAM can't be read. A failed load would also
+        fall back, but a load that *nearly* fits tends to fail later, in a
+        dictation, instead."""
+        from verbal_code import gpu
+
+        report = gpu.detect()
+        self._gpu_device = next(
+            (d for d in report.devices
+             if d.index == self.device_index and d.supported), None)
+        free = self._gpu_device.vram_free if self._gpu_device else None
+        if free is None:
+            return None
+        need = whisper_vram_estimate(self.model_size,
+                                     self._compute_type_for("cuda"))
+        if free >= need:
+            return None
+        mib = 1024 * 1024
+        return (
+            f"not enough free GPU memory for Whisper {self.model_size} "
+            f"({free // mib} MiB free, ~{need // mib} MiB needed): another GPU "
+            "app (for example Ollama) is using VRAM. Free it with "
+            "`ollama stop <model>`, or set OLLAMA_KEEP_ALIVE shorter"
+        )
+
+    def _gpu_label(self) -> str:
+        """``rocm, gfx1200, idx 0`` for the startup line; best effort."""
+        device = getattr(self, "_gpu_device", None)
+        if device is None:
+            return f"idx {self.device_index}"
+        backend = "rocm" if device.vendor == "amd" else "cuda"
+        return f"{backend}, {device.target}, idx {self.device_index}"
+
+    # ── Loading ──
+
+    def _construct(self, device: str, compute_type: str) -> None:
         from faster_whisper import BatchedInferencePipeline, WhisperModel
 
-        logger.info(
-            "Loading Whisper model '%s' (device=%s, compute_type=%s, threads=%d)...",
-            self.model_size,
-            self.device,
-            self.compute_type,
-            self.cpu_threads,
-        )
         t0 = time.monotonic()
         self._model = WhisperModel(
             self.model_size,
-            device=self.device,
-            compute_type=self.compute_type,
+            device=device,
+            device_index=self.device_index if device == "cuda" else 0,
+            compute_type=compute_type,
             cpu_threads=self.cpu_threads,
         )
         self._batched = BatchedInferencePipeline(model=self._model)
         logger.info("Whisper model loaded in %.2fs", time.monotonic() - t0)
-        self._warmup()
 
-    def _warmup(self) -> None:
+    def _release(self) -> None:
+        """Free a (possibly half-built) model, GPU memory included."""
+        with self._lock:
+            self._batched = None
+            self._model = None
+        gc.collect()
+
+    def load_model(self) -> None:
+        """Download (if needed) and load the Whisper model, then warm it up.
+
+        A GPU load or warmup failure falls back to CPU instead of raising.
+        """
+        logger.info(
+            "Loading Whisper model '%s' (device=%s, compute_type=%s, threads=%d)...",
+            self.model_size,
+            self.requested_device,
+            self.requested_compute_type,
+            self.cpu_threads,
+        )
+        device, reason = self._plan_device()
+        if device == "cuda":
+            compute_type = self._compute_type_for("cuda")
+            try:
+                # Construction and warmup in one try: a bad ROCm/CUDA setup
+                # often loads fine and only fails on the first inference.
+                self._construct("cuda", compute_type)
+                self._warmup(strict=True)
+            except Exception as exc:  # noqa: BLE001 — any GPU failure → CPU
+                self._release()
+                reason = _Fallback(
+                    f"GPU load failed ({type(exc).__name__}: {_first_line(exc)})",
+                    warn=True)
+            else:
+                self.device, self.compute_type = "cuda", compute_type
+                self.fallback_reason = None
+                self._log_setup(f"cuda({self._gpu_label()})")
+                return
+        self._fall_back_to_cpu(reason)
+
+    def _fall_back_to_cpu(
+        self, fallback: _Fallback | None, mid_session: bool = False
+    ) -> None:
+        compute_type = self._compute_type_for("cpu")
+        if fallback is not None:
+            reason = fallback.reason
+            self.fallback_reason = reason
+            explicit = self.requested_device == "cuda"
+            self.fallback_notify = explicit or mid_session
+            message = "%s; falling back to CPU %s. %s"
+            if mid_session:
+                message = ("%s; retrying this dictation on CPU %s and staying "
+                           "on CPU for this session. %s")
+            if explicit:
+                logger.error(message, reason, compute_type, _DOCTOR_HINT)
+            elif fallback.warn or mid_session:
+                logger.warning(message, reason, compute_type, _DOCTOR_HINT)
+            else:
+                logger.info("Whisper on CPU: %s", reason)
+        self._construct("cpu", compute_type)
+        self.device, self.compute_type = "cpu", compute_type
+        self._warmup()
+        self._log_setup("cpu")
+
+    def _log_setup(self, device_label: str) -> None:
+        logger.info(
+            "Whisper: model=%s device=%s compute_type=%s",
+            self.model_size, device_label, self.compute_type,
+        )
+
+    def _warmup(self, strict: bool = False) -> None:
         """Run one throwaway inference so the first dictation isn't penalised by
-        lazy init."""
+        lazy init. ``strict`` re-raises a failure (the GPU path treats it as
+        a broken GPU); otherwise warmup is best-effort."""
         try:
             silence = np.zeros(self.sample_rate, dtype=np.float32)
             with self._lock:
@@ -207,13 +435,34 @@ class WhisperTranscriber(TranscriberBase):
                     pass
             logger.info("Whisper warmup complete")
         except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            if strict:
+                raise
             logger.debug("Warmup skipped: %s", exc)
 
     def transcribe_batch(self, audio: np.ndarray) -> str:
-        """Run full-utterance transcription and return the joined text."""
+        """Run full-utterance transcription and return the joined text.
+
+        A GPU failure mid-session (out of memory, a HIP fault) retries this
+        same audio once on CPU and stays on CPU for the session, so the
+        dictation isn't lost. The swap is safe here: Whisper never streams
+        live, so this transcriber is only used from the one dictation
+        thread, and while it runs the app's ``_processing`` flag keeps a tray
+        model switch from committing (MCC-44, MCC-125).
+        """
         if self._model is None:
             self.load_model()
+        try:
+            return self._transcribe_batch(audio)
+        except Exception as exc:
+            if self.device != "cuda":
+                raise
+            reason = _Fallback(f"GPU transcription failed ({type(exc).__name__}: "
+                               f"{_first_line(exc)})", warn=True)
+            self._release()
+            self._fall_back_to_cpu(reason, mid_session=True)
+            return self._transcribe_batch(audio)
 
+    def _transcribe_batch(self, audio: np.ndarray) -> str:
         duration = len(audio) / self.sample_rate
         logger.info("Transcribing %.2fs of audio...", duration)
 
@@ -917,7 +1166,9 @@ def create_transcriber(config: dict) -> TranscriberBase:
     return WhisperTranscriber(
         model_size=model,
         device=whisper_cfg.get("device", "auto"),
-        compute_type=whisper_cfg.get("compute_type", "int8"),
+        # auto: float16 on GPU, int8 on CPU (what the old default was).
+        compute_type=whisper_cfg.get("compute_type", "auto"),
+        device_index=whisper_cfg.get("device_index", 0),
         language=whisper_cfg.get("language", "en"),
         beam_size=whisper_cfg.get("beam_size", 2),
         batch_size=whisper_cfg.get("batch_size", 8),

@@ -81,6 +81,23 @@ info "Installing verbal-code and its dependencies in editable mode..."
 deploy_package "$SCRIPT_DIR" "$EXTRAS"
 ok "verbal-code package installed${EXTRAS:+ with extras $EXTRAS}"
 
+# ── GPU backend (MCC-195) ──
+# No prompt: detection picks the backend; VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu
+# overrides it. A machine without a GPU sees nothing new here.
+detect_gpu_backend
+describe_gpu() {
+    cd / || return 0
+    "$PYTHON" -m verbal_code.ct2_backend describe 2>/dev/null || true
+}
+mapfile -t GPU_DESCRIPTION < <(describe_gpu)
+if [ "$GPU_BACKEND" != cpu ]; then
+    ok "${GPU_DESCRIPTION[0]:-GPU found}"
+elif [ -n "${GPU_DESCRIPTION[1]:-}" ]; then
+    # A GPU without a working runtime: one actionable line.
+    warn "${GPU_DESCRIPTION[1]}"
+fi
+install_ct2_backend "$GPU_BACKEND"
+
 # ── Config file ──
 CONFIG_CREATED=false
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
@@ -120,6 +137,11 @@ echo "  3) Parakeet TDT-CTC 110M - English, featherweight for slower CPUs (~140 
 echo "  4) Another engine or model (sherpa-onnx live streaming, whisper, ...)"
 echo "  5) Keep the current selection ($CURRENT_MODEL)"
 echo "  6) Skip the download (it happens on the app's first start)"
+# Appended, so 1-6 keep their meaning for piped installs (MCC-197). The
+# default stays Parakeet (on CPU) either way.
+if [ "$CT2_BACKEND" = rocm ] || [ "$CT2_BACKEND" = cuda ]; then
+    echo "  7) Whisper distil-small.en on your GPU ($CT2_BACKEND) - fast English (~330 MB)"
+fi
 echo ""
 # `|| true`: a piped install (e.g. `echo 1 | ./install.sh`) hits EOF here
 # and takes the default rather than aborting under `set -e`.
@@ -152,6 +174,13 @@ case "$MODEL_CHOICE" in
         ;;
     5) ;;
     6) DOWNLOAD=false ;;
+    7)
+        if [ "$CT2_BACKEND" = rocm ] || [ "$CT2_BACKEND" = cuda ]; then
+            MODEL_ARGS=(--set-model whisper distil-small.en --whisper-gpu)
+        else
+            warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)"
+        fi
+        ;;
     *) warn "Invalid choice, keeping the current selection ($CURRENT_MODEL)" ;;
 esac
 
@@ -169,7 +198,8 @@ info "Installing the launcher, desktop entry and icon..."
 install_app_files "$SCRIPT_DIR"
 ok "Launcher: $LAUNCHER"
 ok "Desktop entry and icon installed"
-write_stamp "$(source_version "$SCRIPT_DIR")" "$(source_commit "$SCRIPT_DIR")"
+write_stamp "$(source_version "$SCRIPT_DIR")" "$(source_commit "$SCRIPT_DIR")" \
+    "$CT2_BACKEND" "$CT2_WHEEL" "$ROCM_LD_PATH"
 
 # ── PATH check ──
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
@@ -181,6 +211,10 @@ fi
 # ── Done ──
 echo ""
 ok "Verbal Code $(read_stamp version) ($(read_stamp commit)) installed successfully!"
+VERDICT=$(doctor_verdict)
+if [ -n "$VERDICT" ]; then
+    info "GPU: $VERDICT (details: verbal-code --doctor)"
+fi
 echo ""
 info "To run:  verbal-code"
 info "To test: verbal-code --test-audio"

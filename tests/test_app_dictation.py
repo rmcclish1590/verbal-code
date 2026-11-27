@@ -10,6 +10,7 @@ import tempfile
 import threading
 
 import numpy as np
+import pytest
 
 from verbal_code.address_itn import AddressNormalizer
 from verbal_code.app import VerbalCode
@@ -101,6 +102,7 @@ def _make_app(audio, transcriber, live=False):
     app.tray = _FakeTray()
     app._TrayState = _TrayState
     app._dictation_lock = threading.Lock()
+    app._gpu_fallback_notified = False
     app._recording = True
     app._processing = False
     app._record_start = 0.0
@@ -484,3 +486,78 @@ class TestAddressDictionaryIntegration:
         app._on_dictation_stop()
         entry = app.dictionary_store.lookup("mcclish")
         assert (entry.term, entry.source, entry.enabled) == ("McClish", "manual", True)
+
+
+class TestGpuFallbackMidSession:
+    """MCC-197: a GPU failure during a dictation must not lose it."""
+
+    @pytest.fixture
+    def whisper_on_gpu(self, monkeypatch):
+        import sys
+        import types
+
+        from verbal_code.transcriber import WhisperTranscriber
+
+        devices: list[str] = []
+
+        class WhisperModel:
+            def __init__(self, model_size, **kwargs):
+                self.device = kwargs["device"]
+                devices.append(self.device)
+
+        class BatchedInferencePipeline:
+            def __init__(self, model):
+                self.model = model
+
+            def transcribe(self, audio, **kwargs):
+                if self.model.device == "cuda" and kwargs.get("beam_size") != 1:
+                    raise RuntimeError("HIP error: an illegal memory access")
+                seg = types.SimpleNamespace(text="hello world")
+                info = types.SimpleNamespace(language="en", language_probability=1.0)
+                return [seg], info
+
+        module = types.SimpleNamespace(
+            WhisperModel=WhisperModel,
+            BatchedInferencePipeline=BatchedInferencePipeline,
+        )
+        monkeypatch.setitem(sys.modules, "faster_whisper", module)
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: (1, ""))
+        monkeypatch.setattr("verbal_code.transcriber._replaced_rocm_reason",
+                            lambda: None)
+        monkeypatch.setattr(WhisperTranscriber, "_gpu_label", lambda self: "idx 0")
+        monkeypatch.setattr(WhisperTranscriber, "_vram_shortfall", lambda self: None)
+        transcriber = WhisperTranscriber(cpu_threads=2)
+        transcriber.load_model()
+        assert transcriber.device == "cuda"
+        return transcriber, devices
+
+    def test_dictation_is_retried_on_cpu_and_later_ones_stay_there(
+        self, whisper_on_gpu
+    ):
+        transcriber, devices = whisper_on_gpu
+        app = _make_app(_speech(), transcriber)
+
+        app._on_dictation_stop()
+
+        assert app.injector.injected == ["Hello world "]
+        assert app.tray.states[-1] == "idle"
+        assert transcriber.device == "cpu"
+        assert app.tray.notifications == [
+            "GPU unavailable — Whisper is running on the CPU "
+            "(run verbal-code --doctor)"
+        ]
+
+        # The next dictation runs on the CPU model; no second notification.
+        app.capture = _FakeCapture(_speech())
+        app._recording = True
+        app._on_dictation_stop()
+        # (Capitalisation carries across dictations: no sentence end yet.)
+        assert app.injector.injected == ["Hello world ", "hello world "]
+        assert devices == ["cuda", "cpu"]
+        assert len(app.tray.notifications) == 1
+
+    def test_engines_without_gpu_never_notify(self):
+        app = _make_app(_speech(), _FakeTranscriber(text="hello world"))
+        app._on_dictation_stop()
+        assert app.tray.notifications == []

@@ -50,13 +50,39 @@ if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then
                 echo "app running during install" >> "$FAKE_LOG"
             fi
             touch "$venv/deployed-marker"
+            # A dependency bump makes pip swap the ROCm build for PyPI's.
+            if [ -n "${FAKE_DEPLOY_REPLACES_CT2:-}" ]; then
+                echo "pypi 4.9.1" > "$venv/ct2-flavor"
+            fi
             [ "${FAKE_FAIL:-}" = deploy ] && exit 1
             exit 0 ;;
     esac
     exit 0
 fi
+if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code.ct2_backend ]; then
+    echo "ct2 ${*:3}" >> "$FAKE_LOG"
+    flavor=$(cat "$venv/ct2-flavor" 2>/dev/null || echo "pypi 4.9.1")
+    case "${3:-}" in
+        flavor) echo "$flavor" ;;
+        is-pinned-rocm) [ "$flavor" = "rocm 4.9.1" ]; exit ;;
+        verify) [ "${FAKE_FAIL:-}" = verify ] && exit 3 ;;
+        wheel-name) echo "$FAKE_WHEEL" ;;
+        install-rocm)
+            if [ "${FAKE_FAIL:-}" = backend ]; then
+                echo "ctranslate2 sees no GPU device" >&2
+                exit 1
+            fi
+            echo "rocm 4.9.1" > "$venv/ct2-flavor"
+            echo "$FAKE_WHEEL" ;;
+        install-pypi) echo "pypi 4.9.1" > "$venv/ct2-flavor" ;;
+    esac
+    exit 0
+fi
 if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code ]; then
     case "${3:-}" in
+        --gpu-detect)
+            echo "${FAKE_GPU_LINE:-backend=cpu python=cp312 ld_path=0}"; exit 0 ;;
+        --doctor) echo "Verdict: ${FAKE_VERDICT:-CPU (no GPU)}"; exit 0 ;;
         --version)
             [ "${FAKE_FAIL:-}" = health ] && exit 1
             echo "Verbal Code 0.1.0"; exit 0 ;;
@@ -70,6 +96,10 @@ if [ "${1:-}" = -m ] && [ "${2:-}" = verbal_code ]; then
 fi
 exec python3 "$@"
 """
+
+FAKE_WHEEL = (
+    "ctranslate2-4.9.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+)
 
 # An "old" launcher that really starts the stub app, for restart tests.
 LIVE_LAUNCHER = (
@@ -168,6 +198,20 @@ class Sandbox:
         hub.mkdir(parents=True)
         (hub / "weights").write_bytes(b"\x01" * 64)
 
+    def install_gpu(self, flavor: str = "rocm 4.9.1") -> None:
+        """An existing install on the ROCm backend (MCC-196)."""
+        self.install()
+        self.stamp.write_text(
+            f"version=0.0.9\ncommit=0ldc0de\ngpu_backend=rocm\nct2_wheel={FAKE_WHEEL}\n"
+        )
+        (self.venv / "ct2-flavor").write_text(flavor + "\n")
+
+    def flavor(self) -> str:
+        return (self.venv / "ct2-flavor").read_text().strip()
+
+    def ct2_calls(self) -> list[str]:
+        return [c for c in self.calls() if c.startswith("ct2 install")]
+
     def user_data(self) -> dict[str, str]:
         return {
             **_digest_tree(self.config_dir),
@@ -189,6 +233,7 @@ class Sandbox:
             "HOME": str(self.home),
             "PATH": f"{self.fakebin}:{os.environ['PATH']}",
             "FAKE_LOG": str(self.log),
+            "FAKE_WHEEL": FAKE_WHEEL,
             "DISPLAY": ":test",
             **self.extra_env,
         }
@@ -501,3 +546,120 @@ def test_ctrl_c_during_deploy_rolls_back(sandbox):
     assert not (sandbox.venv / "deployed-marker").exists()
     assert "old launcher" in sandbox.launcher.read_text()
     assert not sandbox.backup.exists()
+
+
+# ── GPU backend (MCC-196) ──
+
+def test_rocm_wheel_replaced_by_deploy_is_reinstalled(sandbox):
+    sandbox.install_gpu()
+    before = sandbox.user_data()
+
+    result = sandbox.run(FAKE_DEPLOY_REPLACES_CT2="1")
+
+    assert result.returncode == 0, _output(result)
+    assert sandbox.ct2_calls() == [
+        f"ct2 install-rocm --cache-dir {sandbox.home}/.local/share/verbal-code/"
+        "wheels --no-fallback"
+    ]
+    # Verified by the installed build, not just the marker.
+    assert sandbox.flavor() == "rocm 4.9.1"
+    stamp = sandbox.stamp.read_text()
+    assert "gpu_backend=rocm" in stamp and f"ct2_wheel={FAKE_WHEEL}" in stamp
+    assert sandbox.user_data() == before
+    assert "User data unchanged" in _output(result)
+
+
+def test_intact_rocm_wheel_is_kept(sandbox):
+    sandbox.install_gpu()
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    assert sandbox.ct2_calls() == []
+    assert sandbox.flavor() == "rocm 4.9.1"
+    assert "gpu_backend=rocm" in sandbox.stamp.read_text()
+
+
+def test_failed_backend_reinstall_rolls_back(sandbox):
+    sandbox.install_gpu()
+    before = sandbox.user_data()
+    old_stamp = sandbox.stamp.read_text()
+
+    result = sandbox.run(FAKE_DEPLOY_REPLACES_CT2="1", FAKE_FAIL="backend")
+
+    assert result.returncode != 0
+    out = _output(result)
+    assert "Could not keep the ROCm build" in out
+    assert "rolling back" in out
+    assert "0.0.9 (0ldc0de) is installed, unchanged" in out
+    # The venv backup comes back with the working ROCm build in it.
+    assert sandbox.flavor() == "rocm 4.9.1"
+    assert not (sandbox.venv / "deployed-marker").exists()
+    assert sandbox.stamp.read_text() == old_stamp
+    assert sandbox.user_data() == before
+
+
+def test_cpu_marker_means_no_backend_action(sandbox):
+    sandbox.install()
+    sandbox.stamp.write_text("version=0.0.9\ncommit=0ldc0de\ngpu_backend=cpu\n")
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    assert not any(c.startswith("ct2 ") for c in sandbox.calls())
+    assert "gpu_backend=cpu" in sandbox.stamp.read_text()
+
+
+def test_install_without_marker_stays_without_one(sandbox):
+    sandbox.install()
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    assert "gpu_backend" not in sandbox.stamp.read_text()
+
+
+def test_dry_run_reports_the_backend_plan(sandbox):
+    sandbox.install_gpu(flavor="pypi 4.9.1")
+    before = sandbox.user_data()
+    result = sandbox.run("--dry-run")
+    assert result.returncode == 0, _output(result)
+    assert "GPU backend: reinstall ROCm wheel" in _output(result)
+    assert sandbox.ct2_calls() == []
+    assert sandbox.flavor() == "pypi 4.9.1"
+    assert sandbox.user_data() == before
+
+
+def test_dry_run_plan_keep_and_none(sandbox):
+    sandbox.install_gpu()
+    assert "GPU backend: keep (ROCm wheel)" in _output(sandbox.run("--dry-run"))
+    sandbox.stamp.write_text("version=0.0.9\ncommit=0ldc0de\n")
+    assert "GPU backend: none" in _output(sandbox.run("--dry-run"))
+
+
+def test_newly_detected_gpu_is_offered_not_switched(sandbox):
+    sandbox.install()
+    result = sandbox.run(
+        FAKE_GPU_LINE="backend=rocm gfx=gfx1200 index=0 python=cp312 ld_path=0",
+        FAKE_VERDICT="CPU (GPU problem: the ROCm build is not installed)",
+    )
+    assert result.returncode == 0, _output(result)
+    out = _output(result)
+    assert "rocm-capable GPU is now detected" in out
+    assert "--doctor --fix" in out
+    assert "GPU: CPU (GPU problem" in out  # the doctor's verdict (R9.6)
+    assert sandbox.ct2_calls() == []
+
+
+def test_launcher_gets_rocm_lib_path_only_when_recorded(sandbox):
+    """MCC-198: LD_LIBRARY_PATH only for rocm, and only when needed."""
+    sandbox.install_gpu()
+    sandbox.stamp.write_text(sandbox.stamp.read_text() + "rocm_ld_path=1\n")
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    launcher = sandbox.launcher.read_text()
+    assert 'export LD_LIBRARY_PATH="/opt/rocm/lib' in launcher
+    assert "rocm_ld_path=1" in sandbox.stamp.read_text()
+    # A dry run afterwards sees the launcher as current.
+    assert "Files to replace: none" in _output(sandbox.run("--dry-run"))
+
+
+def test_launcher_has_no_rocm_lib_path_by_default(sandbox):
+    sandbox.install_gpu()
+    result = sandbox.run()
+    assert result.returncode == 0, _output(result)
+    assert "LD_LIBRARY_PATH" not in sandbox.launcher.read_text()

@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Variables set here are read by the scripts that source this file.
+# shellcheck disable=SC2034
 # Shared by install.sh, update.sh and uninstall.sh (MCC-193). This is the one
 # definition of where Verbal Code's files live, which of them are
 # application files (built from this repo and safe to replace) and which are
@@ -37,6 +39,12 @@ STAMP_FILE="$VC_DATA_DIR/installed-version"
 # successful update or a rollback. Its presence at start means an earlier
 # update was killed mid-deploy.
 UPDATE_BACKUP_DIR="$VC_DATA_DIR/update-backup"
+# The verified ROCm CTranslate2 wheel (MCC-195), kept so update.sh can
+# reinstall it without a download. Under the app's data dir, not CACHE_DIR:
+# snapshot_user_data lists CACHE_DIR as user data, and update.sh must not
+# see its own wheel there as a user-data change (MCC-196). The pin itself
+# lives in verbal_code/ct2_backend.py.
+WHEEL_CACHE_DIR="$VC_DATA_DIR/wheels"
 
 # Application files: install and update (re)write these. The venv is one
 # too; the app code itself is the repo, installed editable.
@@ -152,10 +160,24 @@ source_commit() {
     echo "$commit"
 }
 
-write_stamp() {  # version commit
+# The stamp also carries the GPU backend marker (MCC-195): gpu_backend=
+# rocm|cuda|cpu, and for rocm the wheel file and whether the launcher must
+# put /opt/rocm/lib on LD_LIBRARY_PATH. Without a backend argument the
+# marker lines are left out, as on installs that predate GPU support.
+write_stamp() {  # version commit [gpu_backend [ct2_wheel [rocm_ld_path]]]
     mkdir -p "$VC_DATA_DIR"
-    printf 'version=%s\ncommit=%s\ninstalled=%s\n' "$1" "$2" "$(date -Is)" \
-        > "$STAMP_FILE.new"
+    {
+        printf 'version=%s\ncommit=%s\ninstalled=%s\n' "$1" "$2" "$(date -Is)"
+        if [ -n "${3:-}" ]; then
+            printf 'gpu_backend=%s\n' "$3"
+        fi
+        if [ "${3:-}" = rocm ] && [ -n "${4:-}" ]; then
+            printf 'ct2_wheel=%s\n' "$4"
+        fi
+        if [ "${3:-}" = rocm ] && [ "${5:-0}" = 1 ]; then
+            printf 'rocm_ld_path=1\n'
+        fi
+    } > "$STAMP_FILE.new"
     mv -f "$STAMP_FILE.new" "$STAMP_FILE"
 }
 
@@ -228,13 +250,160 @@ health_check() {
         && "$PYTHON" -m verbal_code --list-models >/dev/null)
 }
 
+# ── GPU backend (MCC-195) ──
+# CTranslate2 (Whisper's runtime) comes from PyPI as a CUDA build; an AMD
+# GPU needs the ROCm build pinned in verbal_code/ct2_backend.py, which is
+# the one package installed by file rather than through pyproject.toml.
+# Every helper runs from / so a checkout can't shadow the installed code.
+
+# Sets GPU_BACKEND (rocm|cuda|cpu) and GPU_LD_PATH (1 when the ROCm libs
+# load only with /opt/rocm/lib on LD_LIBRARY_PATH) from the installed
+# app's detection. VERBAL_CODE_GPU_BACKEND=rocm|cuda|cpu overrides it.
+detect_gpu_backend() {
+    local line
+    line=$(cd / && "$PYTHON" -m verbal_code --gpu-detect 2>/dev/null) || line=""
+    GPU_BACKEND=$(sed -n 's/^backend=\([a-z]*\).*/\1/p' <<< "$line")
+    GPU_BACKEND=${GPU_BACKEND:-cpu}
+    GPU_LD_PATH=0
+    if [[ " $line " == *" ld_path=1 "* ]]; then
+        GPU_LD_PATH=1
+    fi
+}
+
+# Prints the venv's actual CTranslate2 build, read from the installed
+# library (not the marker): rocm, pypi or missing.
+installed_ct2_backend() {
+    local flavor
+    flavor=$(cd / && "$PYTHON" -m verbal_code.ct2_backend flavor 2>/dev/null) \
+        || flavor=missing
+    echo "${flavor%% *}"
+}
+
+# Puts the build for backend $1 in the venv and verifies a GPU is visible.
+# Sets CT2_BACKEND (what was achieved), CT2_WHEEL and ROCM_LD_PATH for
+# write_stamp. A failure falls back to the PyPI wheel (CPU) with a warning;
+# with "strict" as $2 it returns 1 instead and leaves the rollback to the
+# caller (update.sh).
+install_ct2_backend() {  # rocm|cuda|cpu [strict]
+    local backend=$1 strict=${2:-} wheel rc=0 ld_args=() install_args=()
+    CT2_BACKEND=cpu
+    CT2_WHEEL=""
+    ROCM_LD_PATH=0
+    if [ "${GPU_LD_PATH:-0}" = 1 ]; then
+        ld_args=(--ld-library-path)
+    fi
+    case "$backend" in
+        rocm)
+            if [ -n "$strict" ]; then
+                install_args=(--no-fallback)
+            fi
+            # Already the pinned build and working (a re-run): keep it.
+            if (cd / && "$PYTHON" -m verbal_code.ct2_backend is-pinned-rocm) \
+                && (cd / && "$PYTHON" -m verbal_code.ct2_backend verify \
+                    "${ld_args[@]}" 2>/dev/null); then
+                wheel=$(cd / && "$PYTHON" -m verbal_code.ct2_backend wheel-name)
+            else
+                info "Installing the ROCm build of CTranslate2 (pinned, hash-verified)..."
+                wheel=$(cd / && "$PYTHON" -m verbal_code.ct2_backend install-rocm \
+                    --cache-dir "$WHEEL_CACHE_DIR" "${ld_args[@]}" "${install_args[@]}") \
+                    || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
+                CT2_BACKEND=rocm
+                CT2_WHEEL=$wheel
+                ROCM_LD_PATH=${GPU_LD_PATH:-0}
+                ok "GPU backend: rocm ($wheel)"
+            elif [ -n "$strict" ]; then
+                return 1
+            else
+                warn "Whisper will run on CPU (see the reason above)."
+            fi
+            ;;
+        cuda)
+            if (cd / && "$PYTHON" -m verbal_code.ct2_backend verify); then  # PyPI wheel
+                CT2_BACKEND=cuda
+                ok "GPU backend: cuda (PyPI CTranslate2)"
+            elif [ -n "$strict" ]; then
+                return 1
+            else
+                warn "NVIDIA GPU not usable by CTranslate2; Whisper will run on CPU."
+            fi
+            ;;
+        cpu)
+            # A ROCm build left from an earlier install can't import without
+            # its runtime, which would break the Whisper engine.
+            if [ "$(installed_ct2_backend)" = rocm ]; then
+                info "Replacing the ROCm build of CTranslate2 with PyPI's..."
+                (cd / && "$PYTHON" -m verbal_code.ct2_backend install-pypi) \
+                    || { [ -n "$strict" ] && return 1; warn "Could not reinstall PyPI's CTranslate2"; }
+            fi
+            ;;
+    esac
+}
+
+# update.sh (MCC-196): keep the backend the install recorded. A deploy's
+# pip run can swap the ROCm build back to PyPI's (a ctranslate2 bump, a
+# new Python tag), so the venv's actual build is checked, not the marker.
+# Sets CT2_BACKEND, CT2_WHEEL and ROCM_LD_PATH for write_stamp; returns 1
+# when the ROCm build can't be put back, so the update rolls back instead
+# of silently dropping to CPU. Never switches backends.
+ensure_ct2_backend() {
+    local marker
+    marker=$(read_stamp gpu_backend)
+    CT2_BACKEND=$marker
+    CT2_WHEEL=$(read_stamp ct2_wheel)
+    GPU_LD_PATH=$(read_stamp rocm_ld_path)
+    GPU_LD_PATH=${GPU_LD_PATH:-0}
+    ROCM_LD_PATH=$GPU_LD_PATH
+    case "$marker" in
+        rocm) install_ct2_backend rocm strict || return 1 ;;
+        cuda)
+            # The PyPI build is the CUDA build; nothing to reinstall. A
+            # driver problem isn't the update's to fix, so only warn.
+            if ! (cd / && "$PYTHON" -m verbal_code.ct2_backend verify 2>/dev/null); then
+                warn "The NVIDIA GPU isn't usable right now; run verbal-code --doctor"
+            fi
+            ;;
+    esac
+}
+
+# What ensure_ct2_backend would do, for update.sh --dry-run: "keep",
+# "reinstall ROCm wheel" or "none". Changes nothing.
+ct2_backend_plan() {
+    case "$(read_stamp gpu_backend)" in
+        rocm)
+            if (cd / && "$PYTHON" -m verbal_code.ct2_backend is-pinned-rocm 2>/dev/null); then
+                echo "keep (ROCm wheel)"
+            else
+                echo "reinstall ROCm wheel"
+            fi
+            ;;
+        cuda) echo "keep (PyPI CUDA build)" ;;
+        *) echo none ;;
+    esac
+}
+
+# The doctor's one-line verdict (R9.6), or nothing if it can't run.
+doctor_verdict() {
+    (cd / && "$PYTHON" -m verbal_code --doctor 2>/dev/null) \
+        | sed -n 's/^Verdict: //p' || true
+}
+
 # ── Launcher, desktop entry and icon ──
+# With ROCM_LD_PATH=1 (the ROCm backend, whose libraries resolve only from
+# /opt/rocm/lib because ROCm was installed without an ld.so.conf.d entry;
+# detected at install time and kept in the stamp) the launcher puts that
+# directory on LD_LIBRARY_PATH. Everyone else gets the plain launcher
+# (MCC-198).
+# shellcheck disable=SC2016  # the $-expressions belong to the launcher
 render_launcher() {
-    cat << 'LAUNCHER_EOF'
-#!/usr/bin/env bash
-VENV="$HOME/.local/share/verbal-code/venv"
-exec "$VENV/bin/python" -m verbal_code "$@"
-LAUNCHER_EOF
+    echo '#!/usr/bin/env bash'
+    echo 'VENV="$HOME/.local/share/verbal-code/venv"'
+    if [ "${ROCM_LD_PATH:-0}" = 1 ]; then
+        echo '# The ROCm build of CTranslate2 loads its HIP libraries from here.'
+        echo 'export LD_LIBRARY_PATH="/opt/rocm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+    fi
+    echo 'exec "$VENV/bin/python" -m verbal_code "$@"'
 }
 
 render_desktop_entry() {

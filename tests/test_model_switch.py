@@ -62,6 +62,7 @@ def _make_app(tmp_path, fail_load=False, recording=False, monkeypatch=None):
     app._live_injection = False
     app._model_switch_lock = threading.Lock()
     app._dictation_lock = threading.Lock()
+    app._gpu_fallback_notified = False
     app.transcriber = _FakeTranscriber()
     if monkeypatch is not None:
         import verbal_code.transcriber as transcriber_module

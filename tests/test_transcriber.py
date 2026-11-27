@@ -471,6 +471,11 @@ class TestWhisperThreads:
         module.WhisperModel = WhisperModel
         module.BatchedInferencePipeline = BatchedInferencePipeline
         monkeypatch.setitem(sys.modules, "faster_whisper", module)
+        # No GPU, no install marker: the CPU path, independent of the host.
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: (0, ""))
+        monkeypatch.setattr("verbal_code.transcriber._replaced_rocm_reason",
+                            lambda: None)
         return module
 
     def test_load_model_passes_cpu_threads(self, fake_faster_whisper):
@@ -520,3 +525,259 @@ class TestEngineContract:
         # Constructed but never loaded: unloading must still be safe, since
         # a model switch may unload a transcriber whatever its state.
         create_transcriber({"stt": {"engine": engine}}).unload_model()
+
+
+class _GpuFakeWhisper:
+    """A faster_whisper stand-in whose GPU path can be made to fail."""
+
+    def __init__(self):
+        self.constructed: list[tuple[str, dict]] = []
+        self.fail_construct_on_cuda = False
+        self.fail_warmup_on_cuda = False
+        self.fail_transcribe_on_cuda = False
+        fake = self
+
+        class WhisperModel:
+            def __init__(self, model_size, **kwargs):
+                fake.constructed.append((model_size, kwargs))
+                self.device = kwargs["device"]
+                if self.device == "cuda" and fake.fail_construct_on_cuda:
+                    raise RuntimeError("HIP error: out of memory\nmore detail")
+
+        class BatchedInferencePipeline:
+            def __init__(self, model):
+                self.model = model
+
+            def transcribe(self, audio, **kwargs):
+                on_cuda = self.model.device == "cuda"
+                warmup = kwargs.get("beam_size") == 1
+                if on_cuda and warmup and fake.fail_warmup_on_cuda:
+                    raise RuntimeError("hipErrorNoBinaryForGpu")
+                if on_cuda and not warmup and fake.fail_transcribe_on_cuda:
+                    raise RuntimeError("HIP error: an illegal memory access")
+                info = types.SimpleNamespace(language="en", language_probability=1.0)
+                return [_FakeSegment(f"heard on {self.model.device}")], info
+
+        self.module = types.SimpleNamespace(
+            WhisperModel=WhisperModel, BatchedInferencePipeline=BatchedInferencePipeline
+        )
+
+    def devices(self) -> list[str]:
+        return [kwargs["device"] for _, kwargs in self.constructed]
+
+
+@pytest.fixture
+def gpu_whisper(monkeypatch):
+    fake = _GpuFakeWhisper()
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake.module)
+    monkeypatch.setattr("verbal_code.transcriber.cuda_device_count", lambda: (1, ""))
+    monkeypatch.setattr("verbal_code.transcriber._replaced_rocm_reason",
+                        lambda: None)
+    monkeypatch.setattr(WhisperTranscriber, "_gpu_label",
+                        lambda self: f"rocm, gfx1200, idx {self.device_index}")
+    fake.vram = {"total": 16 * 1024**3, "used": 1024**3}
+    _fake_detect(monkeypatch, fake.vram)
+    return fake
+
+
+def _fake_detect(monkeypatch, vram):
+    """gpu.detect() answering with one RX 9060 XT at index 0 (and 1)."""
+    from verbal_code import gpu
+
+    def detect(**kwargs):
+        devices = [
+            gpu.GpuDevice(vendor="amd", name="RX 9060 XT", pci_id="1002:7590",
+                          target="gfx1200", vram_total=vram["total"],
+                          vram_used=vram["used"], index=i, supported=True)
+            for i in (0, 1)
+        ]
+        return gpu.GpuReport("amd", devices, True, "ok", "rocm", chosen=devices[0])
+    monkeypatch.setattr(gpu, "detect", detect)
+
+
+def _warnings(caplog):
+    return [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+
+
+class TestWhisperGpu:
+    def test_auto_uses_the_gpu_with_float16(self, gpu_whisper, caplog):
+        t = WhisperTranscriber(cpu_threads=6)
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert (t.device, t.compute_type) == ("cuda", "float16")
+        assert gpu_whisper.constructed[0][1]["compute_type"] == "float16"
+        assert t.fallback_reason is None
+        assert ("Whisper: model=distil-small.en device=cuda(rocm, gfx1200, idx 0) "
+                "compute_type=float16") in caplog.text
+
+    def test_gpu_construct_failure_falls_back_to_cpu_int8(self, gpu_whisper, caplog):
+        gpu_whisper.fail_construct_on_cuda = True
+        t = WhisperTranscriber(cpu_threads=6)
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert gpu_whisper.devices() == ["cuda", "cpu"]
+        assert gpu_whisper.constructed[1][1]["compute_type"] == "int8"
+        assert (t.device, t.compute_type) == ("cpu", "int8")
+        assert t.fallback_reason == (
+            "GPU load failed (RuntimeError: HIP error: out of memory)"
+        )
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1 and warnings[0].levelname == "WARNING"
+        assert "falling back to CPU int8" in warnings[0].getMessage()
+        assert "verbal-code --doctor" in warnings[0].getMessage()
+        assert not t.fallback_notify  # auto: logged, no tray notification
+
+    def test_warmup_failure_on_gpu_falls_back(self, gpu_whisper):
+        gpu_whisper.fail_warmup_on_cuda = True
+        t = WhisperTranscriber()
+        t.load_model()
+        assert gpu_whisper.devices() == ["cuda", "cpu"]
+        assert t.device == "cpu"
+        assert "hipErrorNoBinaryForGpu" in t.fallback_reason
+
+    def test_explicit_cuda_fallback_is_an_error_and_notifies(self, gpu_whisper,
+                                                             caplog):
+        gpu_whisper.fail_construct_on_cuda = True
+        t = WhisperTranscriber(device="cuda")
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert t.device == "cpu"
+        assert [r.levelname for r in _warnings(caplog)] == ["ERROR"]
+        assert t.fallback_notify
+
+    def test_no_gpu_under_auto_is_info_only(self, gpu_whisper, monkeypatch, caplog):
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: (0, ""))
+        t = WhisperTranscriber()
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert gpu_whisper.devices() == ["cpu"]
+        assert (t.device, t.compute_type) == ("cpu", "int8")
+        assert _warnings(caplog) == []
+        assert not t.fallback_notify
+
+    def test_explicit_int8_is_respected_on_gpu(self, gpu_whisper):
+        t = WhisperTranscriber(compute_type="int8")
+        t.load_model()
+        assert (t.device, t.compute_type) == ("cuda", "int8")
+
+    def test_gpu_only_compute_type_becomes_int8_on_fallback(self, gpu_whisper):
+        gpu_whisper.fail_construct_on_cuda = True
+        t = WhisperTranscriber(compute_type="float16")
+        t.load_model()
+        assert (t.device, t.compute_type) == ("cpu", "int8")
+
+    def test_cpu_valid_compute_type_survives_fallback(self, gpu_whisper):
+        gpu_whisper.fail_construct_on_cuda = True
+        t = WhisperTranscriber(compute_type="float32")
+        t.load_model()
+        assert (t.device, t.compute_type) == ("cpu", "float32")
+
+    def test_device_cpu_never_touches_the_gpu(self, gpu_whisper, monkeypatch):
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: pytest.fail("probed the GPU"))
+        t = WhisperTranscriber(device="cpu")
+        t.load_model()
+        assert gpu_whisper.devices() == ["cpu"]
+        assert t.fallback_reason is None
+
+    def test_device_index_is_passed_through(self, gpu_whisper, monkeypatch):
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: (2, ""))
+        t = WhisperTranscriber(device_index=1)
+        t.load_model()
+        assert gpu_whisper.constructed[0][1]["device_index"] == 1
+        assert t.device == "cuda"
+
+    def test_device_index_beyond_the_visible_gpus_uses_cpu(self, gpu_whisper):
+        t = WhisperTranscriber(device_index=3)
+        t.load_model()
+        assert t.device == "cpu"
+        assert "device_index is 3" in t.fallback_reason
+
+    def test_mid_session_gpu_failure_retries_on_cpu(self, gpu_whisper, caplog):
+        gpu_whisper.fail_transcribe_on_cuda = True
+        t = WhisperTranscriber()
+        t.load_model()
+        assert t.device == "cuda"
+        audio = np.zeros(16000, dtype=np.float32)
+        with caplog.at_level("INFO"):
+            assert t.transcribe_batch(audio) == "heard on cpu"
+        assert t.device == "cpu" and t.fallback_notify
+        assert len(_warnings(caplog)) == 1
+        # The rest of the session stays on CPU.
+        assert t.transcribe_batch(audio) == "heard on cpu"
+        assert gpu_whisper.devices() == ["cuda", "cpu"]
+
+    def test_cpu_failure_is_not_retried(self, gpu_whisper, monkeypatch):
+        monkeypatch.setattr("verbal_code.transcriber.cuda_device_count",
+                            lambda: (0, ""))
+        t = WhisperTranscriber()
+        t.load_model()
+        t._batched = types.SimpleNamespace(
+            transcribe=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        with pytest.raises(RuntimeError, match="boom"):
+            t.transcribe_batch(np.zeros(16000, dtype=np.float32))
+
+    def test_config_defaults_for_missing_keys(self):
+        t = create_transcriber({"stt": {"engine": "whisper"}})
+        assert (t.requested_device, t.requested_compute_type, t.device_index) == (
+            "auto", "auto", 0
+        )
+
+
+def test_pip_replaced_rocm_wheel_warns_once(monkeypatch, caplog):
+    """R4.17: marker rocm, PyPI build installed, no device: CPU and one
+    WARNING pointing at --doctor --fix. Uses the real check."""
+    from verbal_code import gpu
+
+    fake = _GpuFakeWhisper()
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake.module)
+    monkeypatch.setattr("verbal_code.transcriber.cuda_device_count", lambda: (0, ""))
+    monkeypatch.setattr(gpu, "read_marker", lambda: "rocm")
+    monkeypatch.setattr(gpu, "installed_ct2_flavor", lambda: ("pypi", "4.9.1"))
+    t = WhisperTranscriber()
+    with caplog.at_level("INFO"):
+        t.load_model()
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "replaced by a pip upgrade" in warnings[0].getMessage()
+    assert "--doctor --fix" in warnings[0].getMessage()
+    assert t.device == "cpu"
+
+
+class TestVramPrecheck:
+    """MCC-198: a GPU whose memory another app holds is skipped up front."""
+
+    def test_low_free_vram_warns_and_uses_cpu(self, gpu_whisper, caplog):
+        gpu_whisper.vram["used"] = 16 * 1024**3 - 200 * 1024**2  # 200 MiB free
+        t = WhisperTranscriber()
+        with caplog.at_level("INFO"):
+            t.load_model()
+        assert gpu_whisper.devices() == ["cpu"]  # the GPU load isn't attempted
+        assert t.device == "cpu"
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1 and warnings[0].levelname == "WARNING"
+        message = warnings[0].getMessage()
+        assert "200 MiB free" in message and "Ollama" in message
+        assert "ollama stop" in message and "OLLAMA_KEEP_ALIVE" in message
+
+    def test_unreadable_vram_never_blocks_the_gpu(self, gpu_whisper):
+        gpu_whisper.vram.update(total=None, used=None)
+        t = WhisperTranscriber()
+        t.load_model()
+        assert t.device == "cuda"
+
+    def test_enough_vram_loads_on_gpu(self, gpu_whisper):
+        t = WhisperTranscriber(model_size="large-v3-turbo")
+        t.load_model()
+        assert t.device == "cuda"
+
+    def test_estimates_scale_with_model_and_precision(self):
+        from verbal_code.transcriber import whisper_vram_estimate
+
+        small = whisper_vram_estimate("distil-small.en", "float16")
+        assert whisper_vram_estimate("large-v3-turbo", "float16") > small
+        assert whisper_vram_estimate("distil-small.en", "int8") < small
+        assert 0.5 * 1024**3 < small < 1024**3
