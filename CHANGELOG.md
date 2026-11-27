@@ -41,6 +41,20 @@ below as MCC-NN).
   summary, never switched to. `install.sh` and `update.sh` end with the
   doctor's one-line GPU verdict. `uninstall.sh` removes the wheel cache
   and the backend marker (MCC-196).
+- Whisper picks its device and precision automatically. `stt.whisper.device:
+  auto` uses the GPU when CTranslate2 can see one (`cuda` means the GPU on
+  AMD/ROCm too). The new `compute_type: auto` default means float16 on GPU
+  and int8 on CPU; an explicit value, such as an existing `int8`, is still
+  used as given. The new `stt.whisper.device_index` picks a GPU. Any GPU
+  problem falls back to CPU with one log line saying why: a failed load or
+  warmup, a device index that isn't there, or a ROCm build replaced by a
+  pip upgrade. A GPU failure in the middle of a dictation retries that
+  dictation on CPU, so nothing is lost, and Whisper stays on CPU for the
+  rest of the session. An explicit `device: cuda` that can't be honoured
+  logs an error and shows one tray notification. When the GPU is usable,
+  the tray's Model menu marks Whisper models "(GPU)", and the installer's
+  model menu adds a "Whisper distil-small.en on your GPU" choice as option
+  7. Options 1-6 are unchanged (MCC-197).
 
 ### Security
 

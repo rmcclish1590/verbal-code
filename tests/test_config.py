@@ -310,3 +310,39 @@ class TestTemplatePresets:
             "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
         )
         validate_config(config)
+
+
+class TestWhisperDeviceConfig:
+    """MCC-197: stt.whisper.device / compute_type / device_index."""
+
+    def _config(self, **whisper):
+        return {"hotkey": {}, "stt": {"engine": "whisper", "whisper": whisper},
+                "audio": {}}
+
+    @pytest.mark.parametrize("device", ["auto", "cpu", "cuda"])
+    def test_known_devices_pass(self, device):
+        validate_config(self._config(device=device))
+
+    @pytest.mark.parametrize("device", ["gpu", "rocm", "CUDA", 0])
+    def test_unknown_device_is_rejected(self, device, caplog):
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(self._config(device=device))
+        assert "stt.whisper.device" in caplog.text
+        assert "'cuda' for AMD ROCm" in caplog.text
+
+    def test_unknown_compute_type_is_rejected(self, caplog):
+        with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+            validate_config(self._config(compute_type="fp16"))
+        assert "stt.whisper.compute_type" in caplog.text
+
+    @pytest.mark.parametrize("compute_type", ["auto", "int8", "float16"])
+    def test_known_compute_types_pass(self, compute_type):
+        validate_config(self._config(compute_type=compute_type))
+
+    @pytest.mark.parametrize("index", [-1, 64, "0", True])
+    def test_bad_device_index_is_rejected(self, index):
+        with pytest.raises(SystemExit):
+            validate_config(self._config(device_index=index))
+
+    def test_device_index_in_range_passes(self):
+        validate_config(self._config(device_index=1))

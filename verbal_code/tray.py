@@ -101,6 +101,7 @@ class SystemTray:
         on_model_selected: Callable[[str, str], None] | None = None,
         model_menu: list[tuple[str, list[str]]] | None = None,
         current_model: tuple[str, str] | None = None,
+        gpu_engines: frozenset[str] = frozenset(),
     ):
         self._on_quit = on_quit
         self._on_hotkeys = on_hotkeys
@@ -110,6 +111,8 @@ class SystemTray:
         self._on_model_selected = on_model_selected
         self._model_menu = model_menu or []
         self._current_model = current_model
+        # Engines whose models run on the GPU here: labelled "(GPU)".
+        self._gpu_engines = gpu_engines
         self._indicator: Any = None
         self._status_item: Any = None
         self._model_item: Any = None
@@ -245,7 +248,8 @@ class SystemTray:
 
     def _model_item_label(self, engine: str, model: str) -> str:
         prefix = "✓ " if (engine, model) == self._current_model else "   "
-        return f"{prefix}{engine}: {model}"
+        suffix = " (GPU)" if engine in self._gpu_engines else ""
+        return f"{prefix}{engine}: {model}{suffix}"
 
     def set_model(self, engine: str, model: str) -> None:
         """Update the current-model display and submenu check mark."""

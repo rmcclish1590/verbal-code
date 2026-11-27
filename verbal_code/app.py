@@ -178,6 +178,7 @@ def validate_config(config: dict) -> None:
         sys.exit(1)
     _assert_stt_engine_available(engine)
     _assert_numeric_values(config)
+    _assert_whisper_device(config)
     _assert_sample_rate_supported(engine, config)
 
     mode = config.get("hotkey", {}).get("mode", "hold")
@@ -228,6 +229,7 @@ _NUMERIC_CONFIG_BOUNDS: list[_BoundSpec] = [
     (("stt",), "cpu_threads", int, 1, 256),
     (("stt", "whisper"), "beam_size", int, 1, 20),
     (("stt", "whisper"), "batch_size", int, 1, 64),
+    (("stt", "whisper"), "device_index", int, 0, 63),
     (("injection",), "delay_ms", int, 0, 1000),
     (("injection",), "clipboard_threshold", int, 0, 100000),
     (("vad",), "trim_threshold_db", (int, float), -120, 0),
@@ -254,6 +256,25 @@ def _assert_numeric_values(config: dict) -> None:
             logger.error(
                 "%s is %s, outside the supported range %s to %s",
                 dotted, value, low, high,
+            )
+            sys.exit(1)
+
+
+def _assert_whisper_device(config: dict) -> None:
+    """Exit on a ``stt.whisper.device`` / ``compute_type`` CTranslate2
+    doesn't know. ``cuda`` covers AMD ROCm too (MCC-197)."""
+    from verbal_code.transcriber import WHISPER_COMPUTE_TYPES, WHISPER_DEVICES
+
+    whisper_cfg = (config.get("stt") or {}).get("whisper") or {}
+    for key, allowed in (("device", WHISPER_DEVICES),
+                         ("compute_type", WHISPER_COMPUTE_TYPES)):
+        if key in whisper_cfg and whisper_cfg[key] not in allowed:
+            logger.error(
+                "stt.whisper.%s must be one of %s, got %r%s",
+                key,
+                ", ".join(f"'{v}'" for v in allowed),
+                whisper_cfg[key],
+                " (use 'cuda' for AMD ROCm GPUs too)" if key == "device" else "",
             )
             sys.exit(1)
 
@@ -367,6 +388,22 @@ def setup_logging(config: dict) -> None:
     except OSError as exc:
         logger.warning("Could not restrict permissions on %r: %s", resolved, exc)
     logging.getLogger().addHandler(handler)
+
+
+def _gpu_engines(config: dict) -> frozenset[str]:
+    """Engines the tray's Model menu labels "(GPU)": Whisper, when the
+    install recorded a GPU backend that is still in place and the config
+    lets Whisper use it. A label only (MCC-197); reads files, imports no
+    GPU library."""
+    from verbal_code import gpu
+
+    device = ((config.get("stt") or {}).get("whisper") or {}).get("device", "auto")
+    marker = gpu.read_marker()
+    if device == "cpu" or marker not in ("rocm", "cuda"):
+        return frozenset()
+    if marker == "rocm" and gpu.installed_ct2_flavor()[0] != "rocm":
+        return frozenset()
+    return frozenset({"whisper"})
 
 
 def _unload_quietly(transcriber: object) -> None:
@@ -499,9 +536,13 @@ class VerbalCode:
             on_model_selected=self._on_model_requested,
             model_menu=model_menu,
             current_model=current_selection(config),
+            gpu_engines=_gpu_engines(config),
         )
         self._model_switch_lock = threading.Lock()
         self._dictation_lock = threading.Lock()
+        # One tray notification per session when Whisper can't use the GPU
+        # it was meant to (MCC-197); the log has the details every time.
+        self._gpu_fallback_notified = False
         self._recording = False
         # True from hotkey release until the dictation's text is injected:
         # the transcriber is still in use even though recording has stopped.
@@ -537,6 +578,7 @@ class VerbalCode:
         self.transcriber.load_model()
         if self._tray_enabled:
             self.tray.start()
+        self._report_gpu_fallback()
         self.hotkey.start()
         logger.info("Starting Verbal Code v%s", __version__)
         mods = "+".join(self._hotkey_modifiers)
@@ -681,6 +723,7 @@ class VerbalCode:
             self.tray.set_model(engine, model)
             self.tray.set_state(self._TrayState.IDLE)
             self.tray.notify("Verbal Code", f"Now using {engine} ({model})")
+            self._report_gpu_fallback()
             logger.info("Switched STT to %s (%s)", engine, model)
         except Exception as exc:
             logger.error("Model switch to %s (%s) failed: %s", engine, model, exc)
@@ -933,6 +976,7 @@ class VerbalCode:
             )
             return None
 
+        self._report_gpu_fallback()
         if not raw.strip():
             logger.info("No speech detected")
             self.tray.set_state(self._TrayState.IDLE)
@@ -944,6 +988,22 @@ class VerbalCode:
         else:
             logger.info("Transcribed %d chars", len(text))
         return text
+
+    def _report_gpu_fallback(self) -> None:
+        """Tell the user once per session that Whisper fell back to the CPU
+        when that is news: an explicit ``device: cuda`` that couldn't be
+        honoured, or a GPU failure mid-session. Other engines, and Whisper
+        on a machine without a GPU, never notify."""
+        if self._gpu_fallback_notified:
+            return
+        if not getattr(self.transcriber, "fallback_notify", False):
+            return
+        self._gpu_fallback_notified = True
+        self.tray.notify(
+            "Verbal Code",
+            "GPU unavailable \u2014 Whisper is running on the CPU "
+            "(run verbal-code --doctor)",
+        )
 
     def _postprocess(self, text: str) -> str:
         """Raw transcript -> text to type. The order matters: the dictionary
@@ -1081,7 +1141,11 @@ def _run_list_models(file: TextIO | None = None) -> None:
 
 
 def _run_set_model(
-    config: dict, config_path: str | None, engine: str, model: str
+    config: dict,
+    config_path: str | None,
+    engine: str,
+    model: str,
+    whisper_gpu: bool = False,
 ) -> None:
     """Select ``engine``/``model`` in the config file, as the tray's Model menu
     does, and in ``config`` so a following ``--download-model`` fetches it."""
@@ -1099,9 +1163,20 @@ def _run_set_model(
     if config_path is None:
         print("No config file found to save the model choice in.", file=sys.stderr)
         sys.exit(1)
-    update_config(config_path, lambda cfg: apply_selection(cfg, engine, model))
-    apply_selection(config, engine, model)
-    print(f"Selected the {engine} model '{model}' in {config_path}.")
+    def mutate(cfg: dict) -> None:
+        apply_selection(cfg, engine, model)
+        if whisper_gpu:
+            # Let Whisper use the GPU: device auto finds it, compute_type
+            # auto picks float16 there (an older config's int8 would be
+            # respected and slower).
+            whisper_cfg = cfg["stt"].setdefault("whisper", {})
+            whisper_cfg["device"] = "auto"
+            whisper_cfg["compute_type"] = "auto"
+
+    update_config(config_path, mutate)
+    mutate(config)
+    print(f"Selected the {engine} model '{model}' in {config_path}"
+          + (" for the GPU." if whisper_gpu else "."))
 
 
 def _run_download_model(config: dict) -> None:
@@ -1139,7 +1214,12 @@ def _run_model_commands(args: argparse.Namespace, config: dict) -> None:
     install.sh selects a model and downloads it in one call."""
     if args.set_model:
         engine, model = args.set_model
-        _run_set_model(config, resolve_config_path(args.config), engine, model)
+        if args.whisper_gpu and engine != "whisper":
+            print("--whisper-gpu applies to the whisper engine only.",
+                  file=sys.stderr)
+            sys.exit(2)
+        _run_set_model(config, resolve_config_path(args.config), engine, model,
+                       whisper_gpu=args.whisper_gpu)
     if args.download_model:
         _run_download_model(config)
 
@@ -1184,6 +1264,12 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Download the configured STT model (if missing) and exit; "
         "with --set-model, the newly selected one",
+    )
+    parser.add_argument(
+        "--whisper-gpu",
+        action="store_true",
+        help="With --set-model whisper MODEL: also set stt.whisper.device and "
+        "compute_type to auto so Whisper runs on the GPU",
     )
     parser.add_argument(
         "--doctor",
