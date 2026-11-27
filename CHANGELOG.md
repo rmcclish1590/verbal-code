@@ -12,6 +12,19 @@ below as MCC-NN).
 
 ### Added
 
+- Uninstalling asks whether to keep your dictionary (MCC-200). In a
+  terminal, `./uninstall.sh` shows the dictionary's path and entry count
+  and asks keep or delete. Enter keeps it. A delete has to be confirmed by
+  typing `delete`, and the confirmation says it can't be undone.
+  `--keep-dictionary` and `--purge-dictionary` (`--purge` still works)
+  answer up front. A scripted run needs `--force` and keeps the dictionary
+  unless told otherwise. The summary always says what happened to the
+  dictionary and where it is.
+- `./install.sh` reports an existing dictionary (path, entry count,
+  last-modified date) before changing anything, and leaves it as it is.
+  An unreadable dictionary is reported and left alone, and the install
+  still finishes (MCC-200).
+
 - `verbal-code --doctor` reports whether GPU transcription can work and,
   if not, the failing check and how to fix it: detected AMD/NVIDIA GPUs
   with their gfx target or compute capability, VRAM used/total, the
@@ -75,6 +88,14 @@ below as MCC-NN).
   restricted to owner-only permissions (0600) (MCC-38).
 
 ### Fixed
+
+- A dictionary file that isn't valid JSON (or has the wrong shape) no
+  longer stops Verbal Code from starting. It runs without the dictionary,
+  logs a warning, and refuses to save over the file so nothing in it is
+  lost (MCC-200).
+- A non-interactive `./uninstall.sh` without `--force` used to exit at
+  the first prompt with no explanation. It now says to use `--force`, and
+  still changes nothing (MCC-200).
 
 - Fuzzy dictionary matching no longer swallows a neighbouring word. With a
   multi-word variant in the dictionary, "at liatrio" was close enough to

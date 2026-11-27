@@ -5,37 +5,68 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Paths and the running-app match, shared with install.sh and update.sh.
 # shellcheck source=scripts/install-lib.sh
 source "$SCRIPT_DIR/scripts/install-lib.sh"
-FORCE=false
-PURGE=false
 
+usage() {
+    cat <<USAGE
+Usage: ./uninstall.sh [-f|--force] [--keep-dictionary | --purge-dictionary]
+
+Removes Verbal Code: launcher, desktop entry, icon, venv, config, caches
+and (after asking) downloaded models. Your dictionary is kept unless you
+choose to delete it.
+
+  -f, --force           ask nothing: stop a running Verbal Code, remove the
+                        models, and keep the dictionary unless
+                        --purge-dictionary is given
+  --keep-dictionary     keep the dictionary without asking
+  --purge-dictionary    delete the dictionary too (permanent)
+  --purge               same as --purge-dictionary
+  -h, --help            show this help
+
+Without --force, uninstall needs a terminal to confirm.
+USAGE
+}
+
+FORCE=false
+DICT_CHOICE=""  # keep | purge | "" (ask; keep when nobody can be asked)
+set_dict_choice() {
+    if [ -n "$DICT_CHOICE" ] && [ "$DICT_CHOICE" != "$1" ]; then
+        echo "--keep-dictionary and --purge-dictionary can't be combined." >&2
+        exit 2
+    fi
+    DICT_CHOICE=$1
+}
 for arg in "$@"; do
     case "$arg" in
         -f|--force) FORCE=true ;;
-        --purge) PURGE=true ;;
+        --keep-dictionary) set_dict_choice keep ;;
+        --purge-dictionary|--purge) set_dict_choice purge ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
     esac
 done
 
-# ── Locate the dictionary (kept unless --purge, MCC-128) ──
-# User-curated terms take time to build, so a reinstall should find them.
+# Interactive means a person at a terminal who didn't pass --force. Scripted
+# and CI runs get no prompts, and the flags decide (MCC-200).
+INTERACTIVE=false
+if [ "$FORCE" != true ] && [ -t 0 ]; then
+    INTERACTIVE=true
+fi
+if [ "$FORCE" != true ] && [ "$INTERACTIVE" != true ]; then
+    # There is no one to confirm with, and removing everything unasked is
+    # the wrong default. Nothing has been changed yet.
+    fail "Not running in a terminal, so the uninstall can't be confirmed. For a scripted uninstall, use --force (the dictionary is kept unless you add --purge-dictionary)."
+fi
+
+# ── Locate the dictionary (MCC-128, MCC-200) ──
 # A custom dictionary.path in config.yaml wins; read it before the config
 # is removed. Uses the system python3 (the venv may already be gone).
-DICT_PATH="$CONFIG_DIR/dictionary.json"
-CUSTOM_DICT=$(python3 - "$CONFIG_DIR/config.yaml" 2>/dev/null <<'PY' || true
-import os, sys, yaml
-with open(sys.argv[1]) as f:
-    cfg = yaml.safe_load(f) or {}
-path = (cfg.get("dictionary") or {}).get("path")
-if path:
-    print(os.path.expanduser(str(path)))
-PY
-)
-if [ -n "$CUSTOM_DICT" ]; then
-    DICT_PATH="$CUSTOM_DICT"
-fi
+DICT_PATH=$(dictionary_path)
 DICT_DISPLAY="${DICT_PATH/#$HOME/\~}"
-KEEP_DICT=false
-if [ "$PURGE" != true ] && [ -f "$DICT_PATH" ]; then
-    KEEP_DICT=true
+inspect_dictionary "$DICT_PATH"
+if [ "$DICT_STATE" = ok ]; then
+    DICT_SUMMARY=$(describe_dictionary "$DICT_PATH")
+else
+    DICT_SUMMARY="$DICT_DISPLAY (unreadable: ${DICT_PROBLEM:-unknown})"
 fi
 
 # ── Check for running instances ──
@@ -48,7 +79,7 @@ if app_running; then
         stop_app || warn "Some instances did not stop"
         ok "Stopped"
     else
-        read -rp "Kill running instances? [y/N] " KILL_CHOICE
+        read -rp "Kill running instances? [y/N] " KILL_CHOICE || KILL_CHOICE=""
         if [[ "${KILL_CHOICE,,}" == "y" ]]; then
             stop_app || warn "Some instances did not stop"
             ok "Stopped"
@@ -58,20 +89,59 @@ if app_running; then
     fi
 fi
 
+# ── Dictionary: keep or delete ──
+# Keep is the default everywhere: on Enter, on any answer except an
+# explicit delete, and whenever there is no one to ask. A delete has to be
+# confirmed by typing "delete", because misreading a prompt would destroy
+# curated data.
+confirm_dictionary_delete() {
+    local answer
+    echo ""
+    warn "This permanently deletes your dictionary: $DICT_PATH"
+    warn "It cannot be undone."
+    read -rp "Type 'delete' to confirm, or press Enter to keep it: " answer || answer=""
+    [ "$answer" = delete ]
+}
+
+if [ "$DICT_STATE" = missing ]; then
+    DICT_CHOICE=""
+else
+    if [ "$INTERACTIVE" = true ] && [ -z "$DICT_CHOICE" ]; then
+        echo ""
+        info "Your dictionary: $DICT_SUMMARY"
+        read -rp "Keep it for a later reinstall, or delete it? [K]eep / [d]elete: " ANSWER \
+            || ANSWER=""
+        case "${ANSWER,,}" in
+            d|delete) DICT_CHOICE=purge ;;
+            *) DICT_CHOICE=keep ;;
+        esac
+    fi
+    if [ "$DICT_CHOICE" = purge ] && [ "$INTERACTIVE" = true ] \
+        && ! confirm_dictionary_delete; then
+        info "Keeping your dictionary."
+        DICT_CHOICE=keep
+    fi
+    DICT_CHOICE=${DICT_CHOICE:-keep}
+fi
+KEEP_DICT=false
+if [ "$DICT_CHOICE" = keep ]; then
+    KEEP_DICT=true
+fi
+
 # ── Confirmation ──
 if [ "$FORCE" != true ]; then
     echo ""
-    if [ "$PURGE" = true ]; then
+    if [ "$DICT_CHOICE" = purge ]; then
         warn "This will remove Verbal Code and all its data, including your dictionary."
     elif [ "$KEEP_DICT" = true ]; then
         warn "This will remove Verbal Code and its data."
-        info "Your dictionary ($DICT_DISPLAY) will be kept; use --purge to remove it too."
+        info "Your dictionary ($DICT_DISPLAY) will be kept."
     else
         warn "This will remove Verbal Code and all its data."
     fi
-    read -rp "Continue? [y/N] " CONFIRM
+    read -rp "Continue? [y/N] " CONFIRM || CONFIRM=""
     if [[ "${CONFIRM,,}" != "y" ]]; then
-        info "Aborted."
+        info "Aborted. Nothing was removed."
         exit 0
     fi
     echo ""
@@ -137,10 +207,14 @@ else
 fi
 
 # A custom dictionary.path can live outside the config directory.
-if [ "$PURGE" = true ] && [ -f "$DICT_PATH" ]; then
+if [ "$DICT_CHOICE" = purge ]; then
     rm -f "$DICT_PATH"
-    ok "Removed dictionary: $DICT_DISPLAY"
-    REMOVED+=("dictionary")
+    if [ -e "$DICT_PATH" ]; then
+        warn "Could not delete the dictionary: $DICT_DISPLAY"
+    else
+        ok "Deleted dictionary: $DICT_DISPLAY"
+        REMOVED+=("dictionary")
+    fi
 fi
 
 # ── Remove cache (sherpa-onnx and vosk models, icons) ──
@@ -190,7 +264,7 @@ if [ "$HF_FOUND" = true ]; then
         echo ""
         warn "Downloaded Whisper/Moonshine/Parakeet models found in ~/.cache/huggingface/"
         warn "These are large and may be shared with other apps."
-        read -rp "Remove model cache? [y/N] " REMOVE_HF
+        read -rp "Remove model cache? [y/N] " REMOVE_HF || REMOVE_HF=""
     fi
     if [[ "${REMOVE_HF,,}" == "y" ]]; then
         for m in "${HF_MODELS[@]}"; do
@@ -216,10 +290,17 @@ fi
 if [ ${#SKIPPED[@]} -gt 0 ]; then
     info "Skipped: ${SKIPPED[*]}"
 fi
+# What happened to the dictionary, either way (MCC-200).
+echo ""
 if [ "$KEEP_DICT" = true ]; then
-    echo ""
-    ok "Kept your dictionary: $DICT_DISPLAY"
-    info "Reinstalling picks it up automatically. To delete it too: ./uninstall.sh --purge"
+    ok "Kept your dictionary: $DICT_SUMMARY"
+    info "Reinstalling picks it up automatically. To delete it: ./uninstall.sh --purge-dictionary"
+elif [ "$DICT_CHOICE" = purge ] && [ ! -e "$DICT_PATH" ]; then
+    ok "Deleted your dictionary: $DICT_SUMMARY. This can't be undone."
+elif [ "$DICT_CHOICE" = purge ]; then
+    warn "Your dictionary is still at $DICT_DISPLAY: it could not be deleted."
+else
+    info "No dictionary found at $DICT_DISPLAY; nothing to keep."
 fi
 echo ""
 info "System packages (xdotool, xclip, python3-gi, etc.) were NOT removed."

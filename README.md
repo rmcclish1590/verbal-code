@@ -74,13 +74,28 @@ yet (their defaults apply; your config is never rewritten).
 To uninstall:
 
 ```bash
-./uninstall.sh            # keeps your custom dictionary for a later reinstall
-./uninstall.sh --purge    # removes the dictionary too
+./uninstall.sh                             # asks: keep or delete your dictionary
+./uninstall.sh --force                     # no questions; keeps the dictionary
+./uninstall.sh --force --purge-dictionary  # no questions; deletes it too
 ```
 
-The uninstaller removes the app, venv, config and downloaded models, but
-leaves your dictionary (`~/.config/verbal-code/dictionary.json`, or your
-`dictionary.path`) in place; reinstalling picks it up automatically.
+The uninstaller removes the app, venv, config and downloaded models. Your
+dictionary (`~/.config/verbal-code/dictionary.json`, or your
+`dictionary.path`) is the one thing it keeps by default, because it can't
+be regenerated. Run in a terminal, it shows the dictionary's entry count
+and asks whether to keep it. Enter keeps it. Deleting it has to be
+confirmed by typing `delete`, because it can't be undone. `--keep-dictionary`
+and `--purge-dictionary` (or `--purge`) answer that question up front.
+Without a terminal, for example in a script, uninstall needs `--force`;
+the dictionary is then kept unless you pass `--purge-dictionary`. Either
+way, the summary says whether the dictionary was kept or deleted, and its
+path.
+
+Reinstalling picks a kept dictionary up automatically. The installer
+reports its path, entry count and last-modified date before it changes
+anything, and never overwrites or resets it. If the file can't be read,
+the installer says so, leaves it as it is and finishes the install. Verbal
+Code then runs without the dictionary until you fix or delete the file.
 
 ## Configuration
 

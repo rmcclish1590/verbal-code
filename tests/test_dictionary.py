@@ -186,3 +186,29 @@ class TestAddressFlag:
         path = tmp_path / "dictionary.json"
         path.write_text('{"entries": [{"term": "EnGen", "weight": 2}]}')
         assert DictionaryStore(str(path)).lookup("engen") is not None
+
+
+class TestUnreadableFile:
+    """MCC-200: a corrupt dictionary doesn't stop the app and is never
+    overwritten."""
+
+    @pytest.mark.parametrize("text", ["{not json", "", '{"entries": [{"x": 1}]}',
+                                      "[1]", '{"entries": 3}'])
+    def test_loads_empty_and_leaves_the_file_alone(self, tmp_path, caplog, text):
+        path = tmp_path / "dictionary.json"
+        path.write_text(text)
+        with caplog.at_level("WARNING"):
+            store = DictionaryStore(str(path))
+        assert store.entries == []
+        assert store.load_error
+        assert "could not be read" in caplog.text
+        with pytest.raises(ValueError, match="could not be read"):
+            store.add("liatrio")
+        assert path.read_text() == text
+
+    def test_readable_file_has_no_load_error(self, tmp_path):
+        path = tmp_path / "dictionary.json"
+        path.write_text('{"entries": [{"term": "liatrio"}]}')
+        store = DictionaryStore(str(path))
+        assert store.load_error is None
+        assert [e.term for e in store.entries] == ["liatrio"]

@@ -470,6 +470,75 @@ for section, key in (("dictionary", "path"), ("logging", "file")):
 PY
 }
 
+# ── The dictionary (MCC-128, MCC-200) ──
+# The user's curated corrections: the one piece of user data that can't be
+# regenerated, so install reports it and uninstall asks before deleting it.
+
+# Prints where the dictionary lives: a custom dictionary.path from
+# config.yaml, else ~/.config/verbal-code/dictionary.json. Uses the system
+# python3, so it works before the venv exists and after it is removed.
+dictionary_path() {
+    local custom
+    custom=$(python3 - "$CONFIG_DIR/config.yaml" 2>/dev/null <<'PY' || true
+import os, sys, yaml
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f) or {}
+path = (cfg.get("dictionary") or {}).get("path")
+if path:
+    print(os.path.expanduser(str(path)))
+PY
+)
+    echo "${custom:-$CONFIG_DIR/dictionary.json}"
+}
+
+# Reads the dictionary at $1 the way the app does, without changing it.
+# Sets DICT_STATE (missing | ok | invalid), DICT_ENTRIES (ok only),
+# DICT_MODIFIED (last-modified date) and DICT_PROBLEM (invalid only).
+inspect_dictionary() {  # path
+    local result
+    DICT_STATE=missing
+    DICT_ENTRIES=0
+    DICT_MODIFIED=""
+    DICT_PROBLEM=""
+    [ -e "$1" ] || return 0
+    result=$(python3 - "$1" 2>/dev/null <<'PY'
+import datetime, json, os, sys
+path = sys.argv[1]
+try:
+    modified = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+    stamp = modified.strftime("%Y-%m-%d %H:%M")
+except OSError:
+    stamp = "unknown"
+try:
+    with open(path) as f:
+        raw = json.load(f) or {}
+    entries = raw.get("entries", [])
+    if not isinstance(entries, list) or not all(
+        isinstance(e, dict) and isinstance(e.get("term"), str) for e in entries
+    ):
+        raise ValueError("unexpected structure")
+except (OSError, ValueError, AttributeError) as exc:
+    problem = "not valid JSON" if isinstance(exc, json.JSONDecodeError) else (
+        str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+    print(f"invalid\t{stamp}\t{problem}")
+else:
+    print(f"ok\t{stamp}\t{len(entries)}")
+PY
+) || result=$'invalid\tunknown\tcould not be read'
+    IFS=$'\t' read -r DICT_STATE DICT_MODIFIED DICT_ENTRIES <<< "$result"
+    if [ "$DICT_STATE" = invalid ]; then
+        DICT_PROBLEM=$DICT_ENTRIES
+        DICT_ENTRIES=0
+    fi
+}
+
+# "~/.config/verbal-code/dictionary.json (12 entries, last changed ...)"
+describe_dictionary() {  # path  (after inspect_dictionary)
+    local entries="$DICT_ENTRIES entries"
+    [ "$DICT_ENTRIES" = 1 ] && entries="1 entry"
+    echo "${1/#$HOME/\~} ($entries, last changed $DICT_MODIFIED)"
+}
+
 # Prints a fingerprint of the user data: a checksum of every file in the
 # config directory and of a custom dictionary or log file, plus the model
 # entries in the caches (listed, not hashed: they are gigabytes).
