@@ -10,6 +10,18 @@ below as MCC-NN).
 
 ## [Unreleased]
 
+### Added
+
+- `verbal-code --doctor` reports whether GPU transcription can work and,
+  if not, the failing check and how to fix it: detected AMD/NVIDIA GPUs
+  with their gfx target or compute capability, VRAM used/total, the
+  ROCm/CUDA runtime status, the installed CTranslate2 build, the visible
+  GPU count, the relevant environment variables and the effective Whisper
+  device. It needs no audio hardware or valid config, and exits 1 when an
+  installed GPU backend isn't working. `verbal-code --gpu-detect` prints
+  the same detection as one machine-readable line for the installer
+  (MCC-194).
+
 ### Security
 
 - Transcribed text is no longer written to the logs by default — dictation
