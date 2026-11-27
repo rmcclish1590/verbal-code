@@ -88,6 +88,7 @@ if [ "$DRY_RUN" = true ]; then
     else
         warn "Dependencies do not resolve for this checkout; a real run would stop here."
     fi
+    info "GPU backend: $(ct2_backend_plan)"
     install_app_files "$SCRIPT_DIR" check
     info "Files to replace: ${APP_FILES_CHANGED[*]:-none}"
     info "Files already current: ${APP_FILES_UNCHANGED[*]:-none}"
@@ -235,9 +236,17 @@ BACKED_UP=true
 # ── Deploy ──
 info "Deploying verbal-code${EXTRAS:+ with extras $EXTRAS}..."
 deploy_package "$SCRIPT_DIR" "$EXTRAS"
+# Before the health check: a GPU backend that can't be put back fails the
+# update, and the rollback restores the working install (MCC-196).
+ensure_ct2_backend \
+    || fail "Could not keep the ROCm build of CTranslate2 (see above). If the ROCm runtime is gone, switch to CPU with verbal-code --doctor --fix, then update again."
 install_app_files "$SCRIPT_DIR"
 health_check || fail "The updated Verbal Code failed to start (verbal-code --version / --list-models)."
-write_stamp "$NEW_VERSION" "$NEW_COMMIT"
+if [ -n "$CT2_BACKEND" ]; then
+    write_stamp "$NEW_VERSION" "$NEW_COMMIT" "$CT2_BACKEND" "$CT2_WHEEL" "$ROCM_LD_PATH"
+else
+    write_stamp "$NEW_VERSION" "$NEW_COMMIT"
+fi
 DEPLOYED=true
 rm -rf "$UPDATE_BACKUP_DIR"
 ok "Deployed"
@@ -283,6 +292,16 @@ PY
 )
 if [ -n "$NEW_OPTIONS" ]; then
     info "Options your config doesn't set (their defaults apply; see config.yaml in the repo): $NEW_OPTIONS"
+fi
+
+# A GPU added since the install is offered, never switched to (MCC-196).
+detect_gpu_backend
+if [ "$GPU_BACKEND" != cpu ] && [ "${CT2_BACKEND:-cpu}" = cpu ]; then
+    info "A $GPU_BACKEND-capable GPU is now detected; to use it: ./install.sh or verbal-code --doctor --fix"
+fi
+VERDICT=$(doctor_verdict)
+if [ -n "$VERDICT" ]; then
+    info "GPU: $VERDICT"
 fi
 
 if [ "$STOPPED" = true ]; then

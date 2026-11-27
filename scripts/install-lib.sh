@@ -341,6 +341,54 @@ install_ct2_backend() {  # rocm|cuda|cpu [strict]
     esac
 }
 
+# update.sh (MCC-196): keep the backend the install recorded. A deploy's
+# pip run can swap the ROCm build back to PyPI's (a ctranslate2 bump, a
+# new Python tag), so the venv's actual build is checked, not the marker.
+# Sets CT2_BACKEND, CT2_WHEEL and ROCM_LD_PATH for write_stamp; returns 1
+# when the ROCm build can't be put back, so the update rolls back instead
+# of silently dropping to CPU. Never switches backends.
+ensure_ct2_backend() {
+    local marker
+    marker=$(read_stamp gpu_backend)
+    CT2_BACKEND=$marker
+    CT2_WHEEL=$(read_stamp ct2_wheel)
+    GPU_LD_PATH=$(read_stamp rocm_ld_path)
+    GPU_LD_PATH=${GPU_LD_PATH:-0}
+    ROCM_LD_PATH=$GPU_LD_PATH
+    case "$marker" in
+        rocm) install_ct2_backend rocm strict || return 1 ;;
+        cuda)
+            # The PyPI build is the CUDA build; nothing to reinstall. A
+            # driver problem isn't the update's to fix, so only warn.
+            if ! (cd / && "$PYTHON" -m verbal_code.ct2_backend verify 2>/dev/null); then
+                warn "The NVIDIA GPU isn't usable right now; run verbal-code --doctor"
+            fi
+            ;;
+    esac
+}
+
+# What ensure_ct2_backend would do, for update.sh --dry-run: "keep",
+# "reinstall ROCm wheel" or "none". Changes nothing.
+ct2_backend_plan() {
+    case "$(read_stamp gpu_backend)" in
+        rocm)
+            if (cd / && "$PYTHON" -m verbal_code.ct2_backend is-pinned-rocm 2>/dev/null); then
+                echo "keep (ROCm wheel)"
+            else
+                echo "reinstall ROCm wheel"
+            fi
+            ;;
+        cuda) echo "keep (PyPI CUDA build)" ;;
+        *) echo none ;;
+    esac
+}
+
+# The doctor's one-line verdict (R9.6), or nothing if it can't run.
+doctor_verdict() {
+    (cd / && "$PYTHON" -m verbal_code --doctor 2>/dev/null) \
+        | sed -n 's/^Verdict: //p' || true
+}
+
 # ── Launcher, desktop entry and icon ──
 render_launcher() {
     cat << 'LAUNCHER_EOF'
