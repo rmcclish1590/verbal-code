@@ -129,8 +129,10 @@ def verdict(
         reason = "the ROCm build of CTranslate2 is installed on a non-AMD setup"
         fix = FIX_HINT
     elif not probe.imported:
+        from verbal_code.ct2_backend import missing_library_note
+
         reason = f"ctranslate2 does not import ({probe.error})"
-        fix = FIX_HINT
+        fix = missing_library_note(probe.error) or FIX_HINT
     else:
         reason = "ctranslate2 sees no GPU device"
         fix = "check the runtime with rocminfo / nvidia-smi"
@@ -192,8 +194,15 @@ def run_doctor(
              f"{_gib(device.vram_used)} / {_gib(device.vram_total)}")
     line("Runtime", ("OK: " if report.runtime_ok else "not usable: ")
          + report.runtime_detail)
+    if report.libraries:
+        print("  ROCm libraries the GPU build loads:", file=out)
+        width = max(len(lib.name) for lib in report.libraries) + 2
+        for lib in report.libraries:
+            print(f"    {lib.name:<{width}}{lib.describe()}", file=out)
     if report.hint:
         line("Hint", report.hint)
+    if report.fix and report.library_problems():
+        line("Fix", report.fix)
     line("Recommended backend", report.recommended_backend)
 
     print("\nCTranslate2", file=out)
@@ -250,9 +259,15 @@ def run_fix(
     from verbal_code import ct2_backend
 
     out = out or sys.stdout
+    # A fresh detection re-checks every ROCm library, so packages installed
+    # since the last run are picked up and missing ones stop the reinstall
+    # before anything is downloaded (MCC-201).
     report = report or gpu.detect()
     flavor, version = gpu.installed_ct2_flavor()
     print(f"Detected: {report.summary()}", file=out)
+    if report.library_problems():
+        print("Not installing the ROCm build of CTranslate2: its libraries "
+              f"aren't ready. Run: {report.fix}, then rerun {FIX_HINT}.", file=out)
 
     backend = "cpu"
     wheel = None
@@ -293,7 +308,8 @@ def run_fix(
         backend = "cuda" if ok else "cpu"
         if not ok:
             print(f"CUDA backend not usable: {why}", file=out)
-    if report.recommended_backend == "cpu" and report.hint:
+    if (report.recommended_backend == "cpu" and report.hint
+            and not report.library_problems()):
         print(report.hint, file=out)
 
     if gpu.write_marker(backend, wheel,

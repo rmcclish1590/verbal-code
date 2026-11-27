@@ -4,7 +4,10 @@ Answers one question for the installer, ``--doctor`` and the Whisper engine:
 which CTranslate2 *backend* can this machine use?
 
 * ``rocm``: an AMD GPU whose gfx target the pinned ROCm wheel was built for,
-  with a working ROCm 7 runtime (``rocminfo``, ``/dev/kfd``, ``libamdhip64.so.7``).
+  with a working ROCm 7 runtime (``rocminfo``, ``/dev/kfd``) and every
+  shared library the wheel loads, followed through their own dependencies
+  (``libamdhip64.so.7``, ``libhipblas.so.3``, ``libhiprand.so.1``,
+  ``librocrand.so.1``, ...; MCC-201).
 * ``cuda``: an NVIDIA GPU with a working driver (``nvidia-smi``) and the CUDA
   12 cuBLAS / cuDNN 9 libraries the PyPI ``ctranslate2`` wheel loads.
 * ``cpu``: everything else, including any probe that fails or times out.
@@ -48,9 +51,14 @@ ROCM_BUILT_TARGETS = (
 ROCM_OFFICIAL_TARGETS = ("gfx1100", "gfx1101", "gfx1200", "gfx1201")
 
 ROCM_LIB_DIR = "/opt/rocm/lib"
-# ROCm libraries the wheel's libctranslate2 links (readelf -d) besides the
-# HIP runtime, and the AMD apt package that ships each.
-ROCM_WHEEL_LIBS = (("libhipblas.so.3", "hipblas"), ("libhiprand.so.1", "hiprand"))
+LD_SO_CONF = "/etc/ld.so.conf"
+# The libraries the pinned wheel needs, and their packages, live beside the
+# pin: verbal_code.ct2_backend.ROCM_WHEEL_NEEDS / ROCM_LIBRARIES (MCC-201).
+# glibc and the compiler runtime are always present; never walked.
+_BASE_LIBS = frozenset({
+    "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+    "ld-linux-x86-64.so.2", "libgcc_s.so.1", "libstdc++.so.6",
+})
 ROCMINFO_FALLBACK = "/opt/rocm/bin/rocminfo"
 GROUPS_HINT = (
     "add your user to the 'render' and 'video' groups "
@@ -62,6 +70,37 @@ GROUPS_HINT = (
 STAMP_FILE = os.path.expanduser("~/.local/share/verbal-code/installed-version")
 
 RunFn = Callable[..., subprocess.CompletedProcess]
+
+# LibraryStatus.status values
+LIB_OK = "ok"  # in the loader cache
+LIB_LD_PATH = "ld_path"  # under ROCM_LIB_DIR, which the loader isn't configured for
+LIB_STALE = "stale"  # under ROCM_LIB_DIR, configured, but the cache predates it
+LIB_MISSING = "missing"
+
+
+@dataclass
+class LibraryStatus:
+    """One shared library the ROCm wheel needs, directly or indirectly."""
+
+    name: str
+    status: str
+    package: str = ""  # apt package that ships it, when known
+    path: str = ""
+    needed_by: str = ""  # "" when the wheel itself needs it
+
+    def describe(self) -> str:
+        """The doctor's status column."""
+        package = f" (package {self.package})" if self.package else ""
+        if self.status == LIB_OK:
+            return "ok" + package
+        if self.status == LIB_LD_PATH:
+            return f"ok via LD_LIBRARY_PATH={os.path.dirname(self.path)}" + package
+        if self.status == LIB_STALE:
+            return "on disk but not in the loader cache: run sudo ldconfig"
+        by = f", needed by {self.needed_by}" if self.needed_by else ""
+        if self.package:
+            return f"missing{by}: sudo apt install {self.package}"
+        return f"missing{by}: find its package with apt-file search {self.name}"
 
 
 @dataclass
@@ -113,6 +152,14 @@ class GpuReport:
     # alone (a command or a pointer) for --doctor's verdict.
     hint: str = ""
     fix: str = ""
+    # Every library the ROCm wheel would load, when an AMD GPU got as far
+    # as the library check (MCC-201).
+    libraries: list[LibraryStatus] = field(default_factory=list)
+
+    def library_problems(self) -> list[LibraryStatus]:
+        """The libraries that would stop the ROCm wheel from importing."""
+        return [lib for lib in self.libraries
+                if lib.status in (LIB_MISSING, LIB_STALE)]
 
     def machine_line(self, python: str | None = None) -> str:
         """``backend=rocm gfx=gfx1200 index=0 python=cp312 ld_path=0``: the
@@ -150,6 +197,7 @@ class _VendorResult:
     needs_ld_library_path: bool = False
     hint: str = ""
     fix: str = ""
+    libraries: list[LibraryStatus] = field(default_factory=list)
 
 
 _README_FIX = "see README → GPU acceleration"
@@ -223,6 +271,133 @@ def _ld_cache(run: RunFn) -> str:
     return result.stdout if result is not None and result.returncode == 0 else ""
 
 
+def _parse_ld_cache(text: str) -> dict[str, str]:
+    """``ldconfig -p`` as {soname: path}, 64-bit entries first."""
+    cache: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*(\S+)\s+\(([^)]*)\)\s+=>\s+(\S+)", line)
+        if match is None:
+            continue
+        name, flags, path = match.groups()
+        if "x86-64" in flags or name not in cache:
+            cache[name] = path
+    return cache
+
+
+def ld_conf_dirs(conf: str = LD_SO_CONF) -> list[str]:
+    """The directories the dynamic loader is configured to cache:
+    ``/etc/ld.so.conf`` and the files it includes."""
+    dirs: list[str] = []
+
+    def parse(path: str, depth: int) -> None:
+        for raw in (_read(path) or "").splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("include") and len(line.split(None, 1)) == 2:
+                pattern = line.split(None, 1)[1]
+                if not os.path.isabs(pattern):
+                    pattern = os.path.join(os.path.dirname(path), pattern)
+                if depth < 3:
+                    for included in sorted(glob.glob(pattern)):
+                        parse(included, depth + 1)
+            else:
+                dirs.append(line)
+
+    parse(conf, 0)
+    return dirs
+
+
+def _same_dir(a: str, b: str) -> bool:
+    def norm(path: str) -> str:
+        return os.path.realpath(path.rstrip("/") or "/")
+    return norm(a) == norm(b)
+
+
+def _check_rocm_libraries(
+    ld_cache: str,
+    exists: Callable[[str], bool],
+    rocm_lib_dir: str,
+    needed: Callable[[str], list[str]],
+    conf_dirs: list[str],
+    roots: tuple[str, ...],
+    table: Mapping[str, tuple[str, tuple[str, ...]]],
+) -> list[LibraryStatus]:
+    """Every library the ROCm wheel would load, in one pass.
+
+    Starts from the wheel's own needs (``roots``) and follows the real
+    DT_NEEDED entries of each ROCm library it finds; ``ldd`` on the wheel
+    can't do that for a library that is itself missing. For a missing
+    library, ``table``'s known dependencies are checked instead, so
+    hiprand and the rocrand behind it show up together. Distribution
+    libraries are checked but not walked.
+    """
+    cache = _parse_ld_cache(ld_cache)
+    # The cache can lag the disk only when the loader is configured for the
+    # ROCm directory: then `sudo ldconfig` is the fix. Otherwise the launcher
+    # puts the directory on LD_LIBRARY_PATH (MCC-198).
+    configured = any(_same_dir(d, rocm_lib_dir) for d in conf_dirs) or any(
+        _same_dir(os.path.dirname(p), rocm_lib_dir) for p in cache.values()
+    )
+    results: list[LibraryStatus] = []
+    seen: set[str] = set()
+    queue = [(name, "") for name in roots]
+    while queue:
+        name, parent = queue.pop(0)
+        if name in seen or name in _BASE_LIBS:
+            continue
+        seen.add(name)
+        package, known_needs = table.get(name, ("", ()))
+        on_disk = os.path.join(rocm_lib_dir, name)
+        if name in cache:
+            status, path = LIB_OK, cache[name]
+        elif exists(on_disk):
+            status, path = (LIB_STALE if configured else LIB_LD_PATH), on_disk
+        else:
+            status, path = LIB_MISSING, ""
+        results.append(LibraryStatus(name, status, package, path, parent))
+        if status == LIB_MISSING:
+            children = known_needs
+        elif _same_dir(os.path.dirname(path), rocm_lib_dir):
+            children = tuple(needed(path))
+        else:
+            children = ()
+        queue.extend((child, name) for child in children)
+    return results
+
+
+def _library_failure(problems: list[LibraryStatus]) -> tuple[str, str, str]:
+    """(detail, fix, hint) naming every problem library, the packages to
+    install and whether ``sudo ldconfig`` is needed. Never runs either."""
+    missing = [lib for lib in problems if lib.status == LIB_MISSING]
+    stale = [lib for lib in problems if lib.status == LIB_STALE]
+    parts, commands = [], []
+    if missing:
+        parts.append("ROCm libraries missing: " + ", ".join(
+            f"{lib.name} ({lib.package or 'package unknown'})" for lib in missing))
+        packages = list(dict.fromkeys(lib.package for lib in missing if lib.package))
+        if packages:
+            commands.append("sudo apt install " + " ".join(packages))
+        unknown = [lib.name for lib in missing if not lib.package]
+        if unknown:
+            commands.append("apt-file search " + unknown[0])
+    if stale:
+        parts.append("installed but not in the loader cache: "
+                     + ", ".join(lib.name for lib in stale))
+    if missing or stale:
+        commands.append("sudo ldconfig")
+    detail = "; ".join(parts)
+    fix = " && ".join(commands)
+    hint = (
+        f"AMD GPU and ROCm runtime found, but CTranslate2 can't load until "
+        f"you fix this. {detail}. Run: {fix}"
+        + (" (packages from AMD's ROCm repository)" if missing else "")
+        + ", then rerun ./install.sh or verbal-code --doctor --fix. "
+        "See README → GPU acceleration."
+    )
+    return detail, fix, hint
+
+
 # ── AMD ──
 
 def _parse_rocminfo(text: str) -> list[dict[str, str]]:
@@ -266,6 +441,8 @@ def _detect_amd(
     access: Callable[[str, int], bool],
     exists: Callable[[str], bool],
     rocm_lib_dir: str,
+    needed: Callable[[str], list[str]],
+    conf_dirs: Callable[[], list[str]],
 ) -> _VendorResult:
     by_address: dict[str, GpuDevice] = {}
     for _vendor, pci_id, device_dir in cards:
@@ -319,21 +496,20 @@ def _detect_amd(
         if any(resolves("libamdhip64.so.6")):
             return failed("ROCm 6.x found; ROCm 7.2+ required")
         return failed("ROCm 7.2+ runtime not detected (no libamdhip64.so.7)")
-    # The wheel links hipBLAS and hipRAND too; the HIP runtime package
-    # alone (rocm-hip-runtime) doesn't ship them.
-    missing = [lib for lib, _pkg in ROCM_WHEEL_LIBS if not any(resolves(lib))]
-    if missing:
-        packages = " ".join(pkg for lib, pkg in ROCM_WHEEL_LIBS if lib in missing)
-        return failed(
-            f"ROCm libraries missing: {', '.join(missing)}",
-            f"sudo apt install {packages}",
-            f"AMD GPU and ROCm runtime found, but CTranslate2 also needs "
-            f"{', '.join(missing)}: sudo apt install {packages} "
-            f"(from AMD's ROCm repository). See README → GPU acceleration.",
-        )
-    in_cache = all(resolves(lib)[0] for lib in ("libamdhip64.so.7",
-                                                *(lib for lib, _ in ROCM_WHEEL_LIBS)))
-    in_rocm_dir = not in_cache
+    # The wheel needs far more than the HIP runtime package
+    # (rocm-hip-runtime) ships: check the whole chain before anyone swaps
+    # the wheel in (MCC-201).
+    from verbal_code.ct2_backend import ROCM_LIBRARIES, ROCM_WHEEL_NEEDS
+
+    libraries = _check_rocm_libraries(ld_cache, exists, rocm_lib_dir, needed,
+                                      conf_dirs(), ROCM_WHEEL_NEEDS, ROCM_LIBRARIES)
+    problems = [lib for lib in libraries if lib.status in (LIB_MISSING, LIB_STALE)]
+    if problems:
+        detail, fix, hint = _library_failure(problems)
+        result = failed(detail, fix, hint)
+        result.libraries = libraries
+        return result
+    in_rocm_dir = any(lib.status == LIB_LD_PATH for lib in libraries)
 
     # HIP numbers the GPU agents in rocminfo's order, unsupported iGPUs
     # included, so the HIP index is the position among *all* GPU agents.
@@ -360,14 +536,17 @@ def _detect_amd(
 
     if chosen is None:
         found = ", ".join(a["name"] for a in agents)
-        return failed(f"no GPU target the ROCm wheel supports (found {found})",
-                      _README_FIX)
+        result = failed(f"no GPU target the ROCm wheel supports (found {found})",
+                        _README_FIX)
+        result.libraries = libraries
+        return result
     return _VendorResult(
         devices,
         True,
-        "ROCm 7 runtime found",
+        "ROCm 7 runtime and libraries found",
         chosen=chosen,
         needs_ld_library_path=in_rocm_dir,
+        libraries=libraries,
     )
 
 
@@ -467,18 +646,23 @@ def detect(
     exists: Callable[[str], bool] = os.path.exists,
     rocm_lib_dir: str = ROCM_LIB_DIR,
     nvidia_pip_lib_dirs: Callable[[], list[str]] = _nvidia_pip_lib_dirs,
+    needed: Callable[[str], list[str]] | None = None,
+    conf_dirs: Callable[[], list[str]] = ld_conf_dirs,
 ) -> GpuReport:
-    """Detect the GPU and recommend a CTranslate2 backend. Never raises."""
+    """Detect the GPU and recommend a CTranslate2 backend. Never raises.
+    ``needed`` reads a library's DT_NEEDED entries (default: elf_needed);
+    ``conf_dirs`` lists the directories the loader is configured for."""
     env = os.environ if env is None else env
     try:
         return _detect(sysfs_root, run, env, which, kfd_path, access, exists,
-                       rocm_lib_dir, nvidia_pip_lib_dirs)
+                       rocm_lib_dir, nvidia_pip_lib_dirs, needed or elf_needed,
+                       conf_dirs)
     except Exception as exc:  # noqa: BLE001 — detection must never break callers
         return GpuReport(runtime_detail=f"detection failed: {exc}")
 
 
 def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
-            rocm_lib_dir, nvidia_pip_lib_dirs) -> GpuReport:
+            rocm_lib_dir, nvidia_pip_lib_dirs, needed, conf_dirs) -> GpuReport:
     cards = _pci_cards(sysfs_root)
     amd_cards = [c for c in cards if c[0] == AMD_VENDOR]
     nvidia_cards = [c for c in cards if c[0] == NVIDIA_VENDOR]
@@ -486,7 +670,7 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
     results: dict[str, _VendorResult] = {}
     if amd_cards:
         results["rocm"] = _detect_amd(amd_cards, run, which, kfd_path, access,
-                                      exists, rocm_lib_dir)
+                                      exists, rocm_lib_dir, needed, conf_dirs)
     if nvidia_cards:
         results["cuda"] = _detect_nvidia(nvidia_cards, run, which, exists,
                                          nvidia_pip_lib_dirs)
@@ -497,12 +681,14 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
         "amd" if "rocm" in results else "nvidia"
     )
     devices = [d for r in results.values() for d in r.devices]
+    libraries = results["rocm"].libraries if "rocm" in results else []
     working = {b: r for b, r in results.items() if r.runtime_ok}
 
     override = (env.get(OVERRIDE_ENV) or "").strip().lower()
     if override == "cpu":
         return GpuReport(vendor, devices, False,
-                         f"{OVERRIDE_ENV}=cpu forces the CPU backend", "cpu")
+                         f"{OVERRIDE_ENV}=cpu forces the CPU backend", "cpu",
+                         libraries=libraries)
     if override in ("rocm", "cuda"):
         if override not in working:
             detail = (results[override].detail if override in results
@@ -510,7 +696,8 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
             failure = results.get(override, _VendorResult([], False, ""))
             return GpuReport(vendor, devices, False,
                              f"{OVERRIDE_ENV}={override}, but {detail}", "cpu",
-                             hint=failure.hint, fix=failure.fix or _README_FIX)
+                             hint=failure.hint, fix=failure.fix or _README_FIX,
+                             libraries=libraries)
         backend = override
     elif working:
         # Both usable: the one with more VRAM wins.
@@ -523,7 +710,7 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
         # A GPU exists but nothing works: report the first failure's hint.
         first = next(iter(results.values()))
         return GpuReport(vendor, devices, False, first.detail, "cpu",
-                         hint=first.hint, fix=first.fix)
+                         hint=first.hint, fix=first.fix, libraries=libraries)
 
     chosen_result = working[backend]
     return GpuReport(
@@ -534,6 +721,7 @@ def _detect(sysfs_root, run, env, which, kfd_path, access, exists,
         recommended_backend=backend,
         chosen=chosen_result.chosen,
         needs_ld_library_path=chosen_result.needs_ld_library_path,
+        libraries=libraries,
     )
 
 

@@ -98,7 +98,7 @@ class FakeRun:
 
 
 def _detect(tmp_path, outputs, *, kfd_ok=True, env=None, which=None,
-            files=(), pip_dirs=()):
+            files=(), pip_dirs=(), needs=None, conf_dirs=()):
     run = FakeRun(outputs)
     present = set(files) | ({"/dev/kfd"} if kfd_ok is not None else set())
     report = gpu.detect(
@@ -112,6 +112,8 @@ def _detect(tmp_path, outputs, *, kfd_ok=True, env=None, which=None,
         exists=lambda path: path in present,
         rocm_lib_dir="/opt/rocm/lib",
         nvidia_pip_lib_dirs=lambda: list(pip_dirs),
+        needed=lambda path: list((needs or {}).get(path, [])),
+        conf_dirs=lambda: list(conf_dirs),
     )
     return report, run
 
@@ -189,8 +191,18 @@ class TestAmd:
         """ryan-dev's case: rocm-hip-runtime alone, no hipblas/hiprand."""
         report, _ = _detect(amd, {"rocminfo": _rocminfo(DGPU), "ldconfig": LD_HIP7})
         assert report.recommended_backend == "cpu"
-        assert "libhipblas.so.3, libhiprand.so.1" in report.runtime_detail
-        assert "sudo apt install hipblas hiprand" in report.hint
+        assert "libhipblas.so.3 (hipblas)" in report.runtime_detail
+        assert "libhiprand.so.1 (hiprand)" in report.runtime_detail
+        # A missing library's own dependencies are named in the same pass.
+        assert "librocrand.so.1 (rocrand)" in report.runtime_detail
+        assert "librocblas.so.5 (rocblas)" in report.runtime_detail
+        assert report.fix.startswith("sudo apt install hipblas ")
+        assert {"hiprand", "rocrand", "rocblas"} <= set(report.fix.split())
+        assert report.fix.endswith("&& sudo ldconfig")
+        assert report.fix in report.hint
+        statuses = {lib.name: lib.status for lib in report.libraries}
+        assert statuses["libamdhip64.so.7"] == gpu.LIB_OK
+        assert statuses["libhiprand.so.1"] == gpu.LIB_MISSING
 
     def test_rocminfo_missing_means_cpu(self, amd):
         report, _ = _detect(amd, {"ldconfig": LD_ROCM7})
@@ -222,6 +234,163 @@ class TestAmd:
         _detect(amd, {"rocminfo": _rocminfo(IGPU), "ldconfig": LD_ROCM7})
         import os
         assert "HSA_OVERRIDE_GFX_VERSION" not in os.environ
+
+
+# ROCm 7.2.1's real chain behind the wheel (readelf -d on ryan-dev), trimmed
+# to the ROCm libraries plus one distribution library.
+ROCM = "/opt/rocm/lib"
+CHAIN = {
+    f"{ROCM}/libamdhip64.so.7": [
+        "libhsa-runtime64.so.1", "libstdc++.so.6", "libc.so.6"],
+    f"{ROCM}/libhsa-runtime64.so.1": ["libnuma.so.1", "libc.so.6"],
+    f"{ROCM}/libhipblas.so.3": ["librocblas.so.5", "libc.so.6"],
+    f"{ROCM}/librocblas.so.5": ["libamdhip64.so.7", "libm.so.6"],
+    f"{ROCM}/libhiprand.so.1": ["librocrand.so.1", "libamdhip64.so.7"],
+    f"{ROCM}/librocrand.so.1": ["libamdhip64.so.7"],
+}
+
+
+def _ld(*names: str, directory: str = ROCM) -> str:
+    return "".join(f"\t{n} (libc6,x86-64) => {directory}/{n}\n" for n in names)
+
+
+ALL_ROCM = [path.rsplit("/", 1)[1] for path in CHAIN]
+LD_NUMA = _ld("libnuma.so.1", directory="/lib/x86_64-linux-gnu")
+
+
+def _without(*names: str) -> list[str]:
+    return [n for n in ALL_ROCM if n not in names]
+
+
+class TestRocmLibraries:
+    """The full library chain behind the ROCm wheel (MCC-201)."""
+
+    def _detect(self, amd, ld, files=(), conf_dirs=(ROCM,), needs=None):
+        return _detect(amd, {"rocminfo": _rocminfo(DGPU), "ldconfig": ld},
+                       files=set(files), needs=CHAIN if needs is None else needs,
+                       conf_dirs=conf_dirs)[0]
+
+    def test_all_libraries_present_means_rocm(self, amd):
+        report = self._detect(amd, _ld(*ALL_ROCM) + LD_NUMA)
+        assert report.recommended_backend == "rocm"
+        assert report.library_problems() == []
+        names = [lib.name for lib in report.libraries]
+        # Walked through the real DT_NEEDED entries; glibc and libstdc++ never.
+        assert set(names) == {*ALL_ROCM, "libnuma.so.1"}
+        assert "libc.so.6" not in names and "libstdc++.so.6" not in names
+        rocrand = next(lib for lib in report.libraries if lib.name == "librocrand.so.1")
+        assert rocrand.needed_by == "libhiprand.so.1"
+        assert rocrand.package == "rocrand"
+        assert not report.needs_ld_library_path
+
+    def test_missing_hipblas_and_hiprand_name_their_packages(self, amd):
+        present = _without("libhipblas.so.3", "libhiprand.so.1")
+        report = self._detect(amd, _ld(*present) + LD_NUMA)
+        assert report.recommended_backend == "cpu"
+        assert "libhipblas.so.3 (hipblas)" in report.runtime_detail
+        assert "libhiprand.so.1 (hiprand)" in report.runtime_detail
+        assert "sudo apt install hipblas" in report.fix
+        assert "hiprand" in report.hint and "hipblas" in report.hint
+
+    def test_on_disk_but_not_cached_needs_ldconfig(self, amd):
+        """ryan-dev, step 1: the packages were installed, the cache was stale."""
+        cached = _without("libhipblas.so.3", "libhiprand.so.1")
+        files = {f"{ROCM}/libhipblas.so.3", f"{ROCM}/libhiprand.so.1"}
+        report = self._detect(amd, _ld(*cached) + LD_NUMA, files=files)
+        assert report.recommended_backend == "cpu"
+        stale = [lib.name for lib in report.library_problems()]
+        assert stale == ["libhipblas.so.3", "libhiprand.so.1"]
+        assert all(lib.status == gpu.LIB_STALE for lib in report.library_problems())
+        assert "not in the loader cache: libhipblas.so.3, libhiprand.so.1" \
+            in report.runtime_detail
+        assert report.fix == "sudo ldconfig"
+        assert "apt install" not in report.hint
+        assert "sudo ldconfig" in report.hint
+
+    def test_missing_transitive_rocrand_is_named(self, amd):
+        """ryan-dev, step 2: hiprand installed, the rocrand behind it not."""
+        present = [n for n in ALL_ROCM if n != "librocrand.so.1"]
+        report = self._detect(amd, _ld(*present) + LD_NUMA)
+        assert report.recommended_backend == "cpu"
+        (problem,) = report.library_problems()
+        assert (problem.name, problem.package, problem.needed_by) == (
+            "librocrand.so.1", "rocrand", "libhiprand.so.1")
+        assert report.fix == "sudo apt install rocrand && sudo ldconfig"
+        assert "librocrand.so.1 (rocrand)" in report.hint
+
+    def test_missing_library_and_its_known_dependency_in_one_pass(self, amd):
+        """A missing hiprand can't be read, so the table names rocrand."""
+        present = _without("libhiprand.so.1", "librocrand.so.1")
+        report = self._detect(amd, _ld(*present) + LD_NUMA)
+        assert [lib.name for lib in report.library_problems()] == [
+            "libhiprand.so.1", "librocrand.so.1"]
+        assert "sudo apt install hiprand rocrand" in report.fix
+
+    def test_missing_distribution_library(self, amd):
+        report = self._detect(amd, _ld(*ALL_ROCM))
+        (problem,) = report.library_problems()
+        assert (problem.name, problem.package) == ("libnuma.so.1", "libnuma1")
+
+    def test_unknown_library_points_to_apt_file(self, amd):
+        needs = {**CHAIN, f"{ROCM}/librocrand.so.1": ["libmystery.so.9"]}
+        report = self._detect(amd, _ld(*ALL_ROCM) + LD_NUMA, needs=needs)
+        (problem,) = report.library_problems()
+        assert problem.name == "libmystery.so.9" and problem.package == ""
+        assert "package unknown" in report.runtime_detail
+        assert "apt-file search libmystery.so.9" in report.fix
+        assert "apt-file search" in problem.describe()
+
+    def test_unconfigured_rocm_dir_uses_ld_library_path_not_ldconfig(self, amd):
+        """A ROCm tree the loader isn't configured for (no ld.so.conf entry,
+        nothing cached from it) still works through LD_LIBRARY_PATH."""
+        files = {f"{ROCM}/{n}" for n in ALL_ROCM}
+        report = self._detect(amd, LD_NUMA, files=files, conf_dirs=())
+        assert report.recommended_backend == "rocm"
+        assert report.needs_ld_library_path
+        assert all(lib.status == gpu.LIB_LD_PATH for lib in report.libraries
+                   if lib.name != "libnuma.so.1")
+
+    def test_cached_from_rocm_dir_counts_as_configured(self, amd):
+        """No ld.so.conf entry seen, but the cache already holds ROCm libs from
+        the directory: an uncached one there is stale, not LD_LIBRARY_PATH."""
+        cached = [n for n in ALL_ROCM if n != "libhiprand.so.1"]
+        report = self._detect(amd, _ld(*cached) + LD_NUMA,
+                              files={f"{ROCM}/libhiprand.so.1"}, conf_dirs=())
+        assert [lib.status for lib in report.library_problems()] == [gpu.LIB_STALE]
+
+    def test_libraries_reach_the_report_when_overridden_to_cpu(self, amd):
+        report = _detect(amd, {"rocminfo": _rocminfo(DGPU),
+                               "ldconfig": _ld(*ALL_ROCM) + LD_NUMA},
+                         env={gpu.OVERRIDE_ENV: "cpu"}, needs=CHAIN)[0]
+        assert report.recommended_backend == "cpu"
+        assert report.libraries
+
+
+def test_ld_conf_dirs_follows_includes(tmp_path):
+    (tmp_path / "ld.so.conf.d").mkdir()
+    (tmp_path / "ld.so.conf").write_text(
+        "include ld.so.conf.d/*.conf\n/usr/local/lib  # local\n")
+    (tmp_path / "ld.so.conf.d" / "rocm.conf").write_text("/opt/rocm/lib\n")
+    (tmp_path / "ld.so.conf.d" / "x86_64.conf").write_text(
+        "# Multiarch\n/lib/x86_64-linux-gnu\n")
+    assert gpu.ld_conf_dirs(str(tmp_path / "ld.so.conf")) == [
+        "/opt/rocm/lib", "/lib/x86_64-linux-gnu", "/usr/local/lib"]
+    assert gpu.ld_conf_dirs(str(tmp_path / "missing.conf")) == []
+
+
+def test_ld_cache_prefers_64_bit_entries():
+    text = ("\tlibz.so.1 (libc6) => /usr/lib32/libz.so.1\n"
+            "\tlibz.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libz.so.1\n")
+    assert gpu._parse_ld_cache(text) == {"libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1"}
+
+
+def test_library_table_lives_beside_the_pin():
+    from verbal_code import ct2_backend
+
+    assert set(ct2_backend.ROCM_WHEEL_NEEDS) <= set(ct2_backend.ROCM_LIBRARIES)
+    for _name, (package, needs) in ct2_backend.ROCM_LIBRARIES.items():
+        assert package
+        assert set(needs) <= set(ct2_backend.ROCM_LIBRARIES)
 
 
 @pytest.fixture
