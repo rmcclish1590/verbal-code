@@ -1186,6 +1186,18 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "with --set-model, the newly selected one",
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Report whether GPU transcription works, and why not; exits 1 "
+        "when the installed GPU backend is not working",
+    )
+    parser.add_argument(
+        "--gpu-detect",
+        action="store_true",
+        help="Print one machine-readable line with the detected GPU backend "
+        "(used by install.sh) and exit",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"Verbal Code {__version__}"
     )
     return parser
@@ -1194,9 +1206,21 @@ def _build_argument_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Entry point: parse arguments, dispatch diagnostic modes, or run the app."""
     args = _build_argument_parser().parse_args()
+    if args.gpu_detect:
+        # No config, no logging setup: install.sh parses this one line.
+        from verbal_code.gpu import detect
+
+        print(detect().machine_line())
+        sys.exit(0)
     config = load_config(args.config)
     setup_logging(config)
 
+    if args.doctor:
+        # Like --list-devices, skips validate_config: the doctor must work
+        # when the config or the engine is what is broken.
+        from verbal_code.doctor import run_doctor
+
+        sys.exit(run_doctor(config))
     if args.list_devices:
         _run_list_devices()
         sys.exit(0)
